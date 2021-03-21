@@ -1,7 +1,12 @@
 .Python
 .ipynb_checkpoints/
+__pycache__/
 downloads/
 lib/
 data/
 checkpoints/
 models/
+example/
+logs/
+
+*.swp

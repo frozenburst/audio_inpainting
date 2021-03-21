@@ -1,3 +1,4 @@
+from tqdm import tqdm
 import numpy as np
 
 def load_data_filename(filename, batch=False):
@@ -5,15 +6,16 @@ def load_data_filename(filename, batch=False):
     labels = []
     with open(filename, 'r') as f:
         data_list = f.read().splitlines()
-        for line in data_list:
+        for line in tqdm(data_list):
             #datas.append(line.split(' ')[0])
             data_name = line.split(' ')[0]
             data = np.load(data_name)
+            # Normalize from 0~1 to -1~1
+            data = data * 2. - 1.
             if batch is False:
                 w, h, _ = data.shape
                 data = data.reshape(w, h)
             datas.append(data)
-
             labels.append(int(line.split(' ')[1]))
     return np.array(datas), np.array(labels)
 
