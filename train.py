@@ -65,6 +65,7 @@ if __name__ == "__main__":
 
     test_dataset = tf.data.Dataset.from_tensor_slices((test_data_fnames))
     test_dataset = test_dataset.map(lambda x: tf.py_function(load_npy, inp=[x], Tout=[tf.float32, tf.float32]))
+    test_dataset = test_dataset.batch(hp.batch_size)
 
     #print(f'training list\'s shape:{train_data.shape}, testing list\'s shape: {test_data.shape}')
 
@@ -99,6 +100,7 @@ if __name__ == "__main__":
 
     model.fit(train_dataset, epochs=hp.epochs,
               validation_data=test_dataset, validation_freq=2, callbacks=callbacks)
+
 
     test_loss, test_mse = model.evaluate(test_dataset, verbose=2)
     print('\nTest error:', test_mse)
