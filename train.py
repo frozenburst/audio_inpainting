@@ -13,9 +13,9 @@ class hp:
     # parameter
     training_file = './data/train_list.txt'
     testing_file = './data/test_list.txt'
-    logdir = './logs/spec'
+    logdir = './logs'
     #checkpoint_dir = './checkpoints/th_spec'
-    epochs = 1
+    epochs = 10
     validation_split = 0.1
     num_classes = 50
     batch = True
@@ -82,6 +82,8 @@ if __name__ == "__main__":
 
     tensorboard_callbacks = tf.keras.callbacks.TensorBoard(
             log_dir=hp.logdir, histogram_freq=1)
+    tensorboard_profile_callbacks = tf.keras.callbacks.TensorBoard(
+            log_dir=hp.logdir, profile_batch=2)
     file_writer_img = tf.summary.create_file_writer(hp.logdir + '/img')
 
     #img_callback = keras.callbacks.LambdaCallback(on_epoch_end=write_predict_output)
@@ -92,7 +94,8 @@ if __name__ == "__main__":
             monitor='val_loss',
             mode='min',
             save_best_only=True),
-        tensorboard_callbacks,
+        #tensorboard_callbacks,
+        tensorboard_profile_callbacks,
         #img_callback,
     ]
 
