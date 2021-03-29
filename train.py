@@ -15,7 +15,7 @@ class hp:
     testing_file = './data/test_list.txt'
     logdir = './logs'
     #checkpoint_dir = './checkpoints/th_spec'
-    epochs = 10
+    epochs = 2
     validation_split = 0.1
     num_classes = 50
     batch = True
@@ -23,7 +23,7 @@ class hp:
     image_height = 256
     image_width = 256
 
-
+'''
 def write_predict_output(epoch, logs, color_format='GRAY', max_outs=3):
     #test_data = tf.data.experimental.sample_from_datasets(test_dataset)
     test_spec = model.predict(test_data)
@@ -40,6 +40,8 @@ def write_predict_output(epoch, logs, color_format='GRAY', max_outs=3):
     with file_writer_img.as_default():
         tf.summary.image("Test output", img_cat, step=epoch, max_outputs=1)
         #tf.summary.image("Test output", test_specs, step=epoch, max_outputs=max_outs)
+'''
+
 
 def load_pyfunc(filename):
     print(filename.numpy())
@@ -59,12 +61,14 @@ if __name__ == "__main__":
     print("Prefetching...")
     # seems can not work on TF 1.x
     train_dataset = tf.data.Dataset.from_tensor_slices((train_data_fnames))
-    train_dataset = train_dataset.map(lambda x: tf.py_function(load_npy, inp=[x], Tout=[tf.float32, tf.float32]))
+    train_dataset = train_dataset.map(lambda x: tf.py_function(load_npy, inp=[x], Tout=[tf.float32, tf.float32]),
+                                      num_parallel_calls=tf.data.AUTOTUNE)
     train_dataset = train_dataset.shuffle(buffer_size=1000).batch(hp.batch_size)
     train_dataset = train_dataset.prefetch(tf.data.experimental.AUTOTUNE)
 
     test_dataset = tf.data.Dataset.from_tensor_slices((test_data_fnames))
-    test_dataset = test_dataset.map(lambda x: tf.py_function(load_npy, inp=[x], Tout=[tf.float32, tf.float32]))
+    test_dataset = test_dataset.map(lambda x: tf.py_function(load_npy, inp=[x], Tout=[tf.float32, tf.float32]),
+                                    num_parallel_calls=tf.data.AUTOTUNE)
     test_dataset = test_dataset.batch(hp.batch_size)
 
     #print(f'training list\'s shape:{train_data.shape}, testing list\'s shape: {test_data.shape}')
@@ -74,17 +78,15 @@ if __name__ == "__main__":
     #test_labels = keras.utils.to_categorical(test_labels)
 
     #import pdb; pdb.set_trace()
-    
+
     print("Build model...")
     model = auto_encoder(hp.image_height, hp.image_width)
 
-    
+
 
     tensorboard_callbacks = tf.keras.callbacks.TensorBoard(
-            log_dir=hp.logdir, histogram_freq=1)
-    tensorboard_profile_callbacks = tf.keras.callbacks.TensorBoard(
-            log_dir=hp.logdir, profile_batch=2)
-    file_writer_img = tf.summary.create_file_writer(hp.logdir + '/img')
+            log_dir=hp.logdir, histogram_freq=1, profile_batch='10,20')
+    #file_writer_img = tf.summary.create_file_writer(hp.logdir + '/img')
 
     #img_callback = keras.callbacks.LambdaCallback(on_epoch_end=write_predict_output)
 
@@ -94,8 +96,7 @@ if __name__ == "__main__":
             monitor='val_loss',
             mode='min',
             save_best_only=True),
-        #tensorboard_callbacks,
-        tensorboard_profile_callbacks,
+        tensorboard_callbacks,
         #img_callback,
     ]
 
