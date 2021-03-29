@@ -127,7 +127,7 @@ def xception(num_classes=50, img_height=256, img_width=256, training=True):
 def auto_encoder(img_height=256, img_width=256, training=True):
 
     encoder_input = keras.Input(shape=(img_height, img_width, 1), name="spec")
-    
+
     cnum = 48
     padding = 'same'
     x = layers.Conv2D(cnum, 3, (1,1), padding, activation="elu", name='conv1')(encoder_input)
@@ -143,7 +143,7 @@ def auto_encoder(img_height=256, img_width=256, training=True):
     x = layers.Conv2D(cnum*4, 3, (1,1), padding, activation="elu", name='conv11')(x)
     x = layers.Conv2D(cnum*4, 3, (1,1), padding, activation="tanh", name='conv12')(x)
     encoder_output = x
-    
+
     x = layers.UpSampling2D(size=(2, 2), interpolation="nearest", name='up1')(x)
     x = layers.Conv2D(cnum*2, 3, (1,1), padding, activation="elu", name='conv13')(x)
     x = layers.Conv2D(cnum*2, 3, (1,1), padding, activation="elu", name='conv14')(x)
@@ -154,11 +154,17 @@ def auto_encoder(img_height=256, img_width=256, training=True):
     decoder_output = x
 
     autoencoder = keras.Model(encoder_input, decoder_output, name="autoencoder")
-    
-    loss_fn = tf.keras.losses.MeanAbsoluteError(reduction='sum_over_batch_size')
+
+    # self train loop should comduct loss within loop. So no auto reduction here.
+    #loss_fn = tf.keras.losses.MeanAbsoluteError(reduction='sum_over_batch_size')
+    loss_fn = tf.keras.losses.MeanAbsoluteError(reduction=tf.keras.losses.Reduction.NONE)
+
+    optimizer = keras.optimizers.Adam(1e-4, beta_1=0.5, beta_2=0.999)
+    ''' for keras model fit
     autoencoder.compile(
     	optimizer=keras.optimizers.Adam(1e-4, beta_1=0.5, beta_2=0.999),
         loss=loss_fn,
         metrics=["mean_absolute_error"],
     )
-    return autoencoder
+    '''
+    return autoencoder, optimizer, loss_fn

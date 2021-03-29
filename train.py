@@ -1,52 +1,35 @@
 from data_loader import *
 from models import *
-from tensorflow import keras
+from summary_ops import scalar_summary, images_summary
+from tqdm import tqdm
 
 import tensorflow as tf
-import numpy as np
-import matplotlib.pyplot as plt
-import pathlib
+import os.path as op
+import datetime
 
 print(tf.__version__)
 
+
 class hp:
-    # parameter
+    # Training setting
     training_file = './data/train_list.txt'
     testing_file = './data/test_list.txt'
     logdir = './logs'
-    #checkpoint_dir = './checkpoints/th_spec'
-    epochs = 2
+    checkpoint_dir = './checkpoints'
+    checkpoint_prefix = op.join(checkpoint_dir, "ckpt")
+    checkpoint_restore_dir = ''
+    checkpoint_freq = 2
+    epochs = 5
+    steps_per_epoch = 20 # -1: whole training data
     validation_split = 0.1
-    num_classes = 50
     batch = True
     batch_size = 32
+    max_outputs = 10
+    profile = True # profile on first epoch, batch 10~20
+    # Data
     image_height = 256
     image_width = 256
-
-'''
-def write_predict_output(epoch, logs, color_format='GRAY', max_outs=3):
-    #test_data = tf.data.experimental.sample_from_datasets(test_dataset)
-    test_spec = model.predict(test_data)
-    #print(test_data[:max_outs].shape, test_data[:max_outs].max(), test_data[:max_outs].min())
-    #print(test_specs.shape, test_specs.max(), test_specs.min())
-    img = [test_data, test_spec]
-    img_cat = tf.concat(img, axis=2)
-    img_cat = (img_cat + 1.) / 2.
-    #print(img_cat.shape)
-    ## Makes -1~1 to 0~255
-    #if color_format == 'GRAY':
-    #    img_cat = tf.clip_by_value((img_cat+1.)*127.5, 0, 255)
-
-    with file_writer_img.as_default():
-        tf.summary.image("Test output", img_cat, step=epoch, max_outputs=1)
-        #tf.summary.image("Test output", test_specs, step=epoch, max_outputs=max_outs)
-'''
-
-
-def load_pyfunc(filename):
-    print(filename.numpy())
-    breakpoint()
-    return 2.64
+    num_classes = 50
 
 
 if __name__ == "__main__":
@@ -58,53 +41,161 @@ if __name__ == "__main__":
     print(train_data_fnames.shape, test_data_fnames.shape)
     print(train_data_fnames[0])
 
+    # Initialize distribute strategy
+    strategy = tf.distribute.MirroredStrategy()
+
+    # It seems that the auto share is not avalibel for our data type.
+    # How ever it should be tf.data.experimental.AutoShardPolicy.FILE since the files >> workers.
+    # If transfering data type to TFRecord, it will be good to FILE share policy.
+    options = tf.data.Options()
+    options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.DATA
+    print('Number of devices: {}'.format(strategy.num_replicas_in_sync))
+    GLOBAL_BATCH_SIZE = hp.batch_size * strategy.num_replicas_in_sync
+
     print("Prefetching...")
-    # seems can not work on TF 1.x
+    # Map function should update to TFRecord
+    # instead of tf.py_function for better performance.
     train_dataset = tf.data.Dataset.from_tensor_slices((train_data_fnames))
     train_dataset = train_dataset.map(lambda x: tf.py_function(load_npy, inp=[x], Tout=[tf.float32, tf.float32]),
                                       num_parallel_calls=tf.data.AUTOTUNE)
-    train_dataset = train_dataset.shuffle(buffer_size=1000).batch(hp.batch_size)
+    train_dataset = train_dataset.shuffle(buffer_size=1000).batch(GLOBAL_BATCH_SIZE)
     train_dataset = train_dataset.prefetch(tf.data.experimental.AUTOTUNE)
+    train_dataset = train_dataset.with_options(options)
 
     test_dataset = tf.data.Dataset.from_tensor_slices((test_data_fnames))
     test_dataset = test_dataset.map(lambda x: tf.py_function(load_npy, inp=[x], Tout=[tf.float32, tf.float32]),
                                     num_parallel_calls=tf.data.AUTOTUNE)
-    test_dataset = test_dataset.batch(hp.batch_size)
+    test_dataset = test_dataset.batch(GLOBAL_BATCH_SIZE)
+    test_dataset = test_dataset.with_options(options)
 
-    #print(f'training list\'s shape:{train_data.shape}, testing list\'s shape: {test_data.shape}')
+    # print(f'training list\'s shape:{train_data.shape}, testing list\'s shape: {test_data.shape}')
 
-    # preprocess
-    #train_labels = keras.utils.to_categorical(train_labels)
-    #test_labels = keras.utils.to_categorical(test_labels)
+    # to distributed strategy
+    train_dist_dataset = strategy.experimental_distribute_dataset(train_dataset)
+    test_dist_dataset = strategy.experimental_distribute_dataset(test_dataset)
 
-    #import pdb; pdb.set_trace()
+    # Create Tensorboard Writer
+    current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    log_dir = op.join(hp.logdir, current_time)
+    file_summary_writer = tf.summary.create_file_writer(log_dir)
 
-    print("Build model...")
-    model = auto_encoder(hp.image_height, hp.image_width)
+    # whole training data
+    if hp.steps_per_epoch == -1:
+            steps_per_epoch = math.ceil(train_data_fnames.shape[0] / GLOBAL_BATCH_SIZE)
+    elif hp.steps_per_epoch > 0:
+            steps_per_epoch = int(hp.steps_per_epoch)
+    else:
+        raise ValueError(f"Wrong number assigned to steps_per_epoch: {hp.steps_per_epoch}")
 
+    with strategy.scope():
+        print("Build model...")
+        model, optimizer, loss_fn = auto_encoder(hp.image_height, hp.image_width)
+        print(model.summary())
+        checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=model)
+        # Restore if the path given
+        if hp.checkpoint_restore_dir != '':
+            checkpoint.restore(tf.train.latest_checkpoint(hp.checkpoint_restore_dir))
 
+        # Would combine with loss_fn
+        test_loss = tf.keras.metrics.Mean(name='test_loss')
 
-    tensorboard_callbacks = tf.keras.callbacks.TensorBoard(
-            log_dir=hp.logdir, histogram_freq=1, profile_batch='10,20')
-    #file_writer_img = tf.summary.create_file_writer(hp.logdir + '/img')
+        train_accuracy = tf.keras.metrics.MeanAbsoluteError(name='train_MAE_loss')
+        test_accuracy = tf.keras.metrics.MeanAbsoluteError(name='test_MAE_loss')
 
-    #img_callback = keras.callbacks.LambdaCallback(on_epoch_end=write_predict_output)
+        def compute_loss(ref, predictions):
+            per_example_loss = loss_fn(ref, predictions)
+            return tf.nn.compute_average_loss(per_example_loss, global_batch_size=GLOBAL_BATCH_SIZE)
 
-    callbacks = [
-        keras.callbacks.ModelCheckpoint(
-            "./checkpoints/spec/save_at_{epoch}_best.h5",
-            monitor='val_loss',
-            mode='min',
-            save_best_only=True),
-        tensorboard_callbacks,
-        #img_callback,
-    ]
+        def train_step(inputs):
+            images, ref_images = inputs
 
-    print(model.summary())
+            with tf.GradientTape() as tape:
+                predictions = model(images, training=True)
+                loss = compute_loss(ref_images, predictions)
 
-    model.fit(train_dataset, epochs=hp.epochs,
-              validation_data=test_dataset, validation_freq=2, callbacks=callbacks)
+            gradients = tape.gradient(loss, model.trainable_variables)
+            optimizer.apply_gradients(zip(gradients, model.trainable_variables))
 
+            # This is counted without GLOBAL_BATCH_SIZE
+            train_accuracy.update_state(ref_images, predictions)
 
-    test_loss, test_mse = model.evaluate(test_dataset, verbose=2)
-    print('\nTest error:', test_mse)
+            summary_images = [images, predictions, ref_images]
+            summary_images = tf.concat(summary_images, axis=2)
+            return loss, summary_images
+
+        def test_step(inputs):
+            images, ref_images = inputs
+
+            predictions = model(images, training=False)
+            t_loss = loss_fn(ref_images, predictions)
+
+            test_loss.update_state(t_loss)
+            test_accuracy.update_state(ref_images, predictions)
+
+        @tf.function
+        def distributed_train_step(dataset_inputs):
+            per_replica_losses, summary_images = strategy.run(train_step, args=(dataset_inputs,))
+            return strategy.reduce(tf.distribute.ReduceOp.MEAN, per_replica_losses, axis=None), summary_images
+
+        @tf.function
+        def distributed_test_step(dataset_inputs):
+            return strategy.run(test_step, args=(dataset_inputs,))
+
+        # Experiment Epoch
+        for epoch in range(hp.epochs):
+            total_loss = 0.0
+            num_batches = 0
+            summary_images_list = []
+
+            ### Training loop.
+            train_iter = iter(train_dist_dataset)
+            for batch_step in tqdm(range(steps_per_epoch)):
+                # The step here refers to whole batch
+                step_loss, summary_images = distributed_train_step(next(train_iter))
+                total_loss += step_loss
+                num_batches += 1
+
+                # Cast tensor from Replica
+                if strategy.num_replicas_in_sync > 1:
+                    summary_images = summary_images.values
+                    # concat on batch channel: n * [b, h, w, c] -> b*n, h, w, c
+                    summary_images = tf.concat(summary_images, axis=0)
+                summary_images_list.append(summary_images)
+
+                if hp.profile:
+                    if epoch == 0 and batch_step == 9:
+                        tf.profiler.experimental.start(hp.logdir)
+                    if epoch == 0 and batch_step == 19:
+                        tf.profiler.experimental.stop()
+
+            # concat all sample on batch channel
+            summary_images_list = tf.concat(summary_images_list, axis=0)
+            train_loss = total_loss / num_batches
+
+            ### Testing loop
+            for x in test_dist_dataset:
+                distributed_test_step(x)
+
+            # Checkpoint save.
+            if epoch % hp.checkpoint_freq == 0:
+                checkpoint.save(hp.checkpoint_prefix)
+
+            # Write to tensorboard.
+            with file_summary_writer.as_default():
+                scalar_summary('train loss', train_loss, step=epoch)
+                scalar_summary('train MAE loss', train_accuracy.result(), step=epoch)
+                images_summary("Training result", summary_images_list, step=epoch, max_outputs=hp.max_outputs)
+
+                scalar_summary('test loss', test_loss.result(), step=epoch)
+                scalar_summary('test MAE loss', test_accuracy.result(), step=epoch)
+
+            template = ("Epoch {}, Loss: {}, MAE loss: {}, Test Loss: {}, "
+                        "Test MAE loss: {}")
+            print(template.format(epoch+1, train_loss,
+                                  train_accuracy.result()*100, test_loss.result(),
+                                  test_accuracy.result()*100))
+
+            test_loss.reset_states()
+            train_accuracy.reset_states()
+            test_accuracy.reset_states()
+
