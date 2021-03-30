@@ -1,173 +1,104 @@
-import numpy as np
-import os
 import tensorflow as tf
 
 from tensorflow import keras
 from tensorflow.keras import layers
-from tensorflow.keras.layers import Dense, Dropout, Flatten
-from tensorflow.keras.layers import Conv2D, MaxPooling2D
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.optimizers import SGD
 
 from inpaint_ops import gen_conv
+from inpaint_ops import resize_mask_like
+# from inpaint_ops import contextual_attention
 
 
-def one_dense_layer(num_classes=50):
-    model = tf.keras.Sequential([
-        tf.keras.layers.Flatten(input_shape=(256, 256)),
-        tf.keras.layers.Dense(128, activation='relu'),
-        tf.keras.layers.Dense(num_classes)
-    ])
+# Reference from GitHub: https://github.com/JiahuiYu/generative_inpainting
+def inpaint_net(img_height=256, img_width=256, training=True):
 
-    model.compile(optimizer='adam',
-                  loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
-                  metrics=['accuracy'])
-    return model
+    xin = keras.Input(shape=(img_height, img_width, 1), name="image")
+    mask = keras.Input(shape=(img_height, img_width, 1), name="mask")
+    offset_flow = None
 
-
-def conv_layers(num_classes=50, img_height=256, img_width=256):
-    model = Sequential([
-        layers.Conv2D(16, 3, padding='same', activation='relu', input_shape=(img_height, img_width, 1)),
-        layers.MaxPooling2D(),
-        layers.Conv2D(32, 3, padding='same', activation='relu'),
-        layers.MaxPooling2D(),
-        layers.Conv2D(64, 3, padding='same', activation='relu'),
-        layers.MaxPooling2D(),
-        layers.Flatten(),
-        layers.Dense(128, activation='relu'),
-        layers.Dense(num_classes)
-    ])
-    model.compile(optimizer='adam',
-                  loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
-                  metrics=['accuracy'])
-    return model
-
-
-def vgg(num_classes=50, img_height=256, img_width=256):
-    model = Sequential()
-    model.add(Conv2D(32, (3, 3), activation='relu', input_shape=(img_height, img_width, 1)))
-    model.add(Conv2D(32, (3, 3), activation='relu'))
-    model.add(MaxPooling2D(pool_size=(2, 2)))
-    model.add(Dropout(0.25))
-
-    model.add(Conv2D(64, (3, 3), activation='relu'))
-    model.add(Conv2D(64, (3, 3), activation='relu'))
-    model.add(MaxPooling2D(pool_size=(2, 2)))
-    model.add(Dropout(0.25))
-
-    model.add(Flatten())
-    model.add(Dense(256, activation='relu'))
-    model.add(Dropout(0.5))
-    model.add(Dense(50, activation='softmax'))
-
-    sgd = SGD(lr=0.01, decay=1e-6, momentum=0.9, nesterov=True)
-    model.compile(loss='categorical_crossentropy', optimizer=sgd, metrics=['accuracy'])
-    return model
-
-
-# from https://keras.io/examples/vision/image_classification_from_scratch/
-def xception(num_classes=50, img_height=256, img_width=256, training=True):
-    inputs = keras.Input(shape=(img_height, img_width, 1))
-    # Image augmentation block
-    #x = data_augmentation(inputs)
-    x = inputs
-
-    # Entry block
-    #x = layers.experimental.preprocessing.Rescaling(1.0 / 255)(x)
-    x = layers.Conv2D(32, 3, strides=2, padding="same", trainable=training)(x)
-    x = layers.BatchNormalization(trainable=training)(x)
-    x = layers.Activation("relu")(x)
-
-    x = layers.Conv2D(64, 3, padding="same", trainable=training)(x)
-    x = layers.BatchNormalization(trainable=training)(x)
-    x = layers.Activation("relu")(x)
-
-    previous_block_activation = x  # Set aside residual
-
-    for size in [128, 256, 512, 728]:
-        x = layers.Activation("relu")(x)
-        x = layers.SeparableConv2D(size, 3, padding="same", trainable=training)(x)
-        x = layers.BatchNormalization(trainable=training)(x)
-
-        x = layers.Activation("relu")(x)
-        x = layers.SeparableConv2D(size, 3, padding="same", trainable=training)(x)
-        x = layers.BatchNormalization(trainable=training)(x)
-
-        x = layers.MaxPooling2D(3, strides=2, padding="same")(x)
-
-        # Project residual
-        residual = layers.Conv2D(size, 1, strides=2, padding="same", trainable=training)(
-            previous_block_activation
-        )
-        x = layers.add([x, residual])  # Add back residual
-        previous_block_activation = x  # Set aside next residual
-
-    x = layers.SeparableConv2D(1024, 3, padding="same", trainable=training)(x)
-    x = layers.BatchNormalization(trainable=training)(x)
-    x = layers.Activation("relu")(x)
-
-    x = layers.GlobalAveragePooling2D()(x)
-    if num_classes == 2:
-        activation = "sigmoid"
-        units = 1
-    else:
-        activation = "softmax"
-        units = num_classes
-
-    x = layers.Dropout(0.5, trainable=training)(x)
-    outputs = layers.Dense(units, activation=activation, trainable=training)(x)
-
-    model = keras.Model(inputs, outputs)
-    model.compile(
-        optimizer=keras.optimizers.Adam(1e-3),
-        loss="binary_crossentropy",
-        metrics=["accuracy"],
-    )
-    return model
-
-
-def auto_encoder(img_height=256, img_width=256, training=True):
-
-    inputs = keras.Input(shape=(img_height, img_width, 2), name="spec")
-    xin, mask = tf.split(inputs, num_or_size_splits=2, axis=3)
+    ones_x = tf.ones_like(xin)
+    x = tf.concat([xin, ones_x*mask], axis=3)
+    # In original codes is: for the reason of indicating image bound?
+    # x = tf.concat([xin, ones_x, ones_x*mask], axis=3)
+    #xin, mask = tf.split(inputs, num_or_size_splits=2, axis=3)
 
     cnum = 48
     padding = 'same'
-    x = gen_conv(inputs, cnum, 3, (1,1), padding, activation="elu", name='conv1')
+    x = gen_conv(x, cnum, 5, (1,1), padding, activation="elu", name='conv1')
     x = gen_conv(x, cnum*2, 3, (2,2), padding, activation="elu", name='conv2_ds')
     x = gen_conv(x, cnum*2, 3, (1,1), padding, activation="elu", name='conv3')
     x = gen_conv(x, cnum*4, 3, (2,2), padding, activation="elu", name='conv4_ds')
     x = gen_conv(x, cnum*4, 3, (1,1), padding, activation="elu", name='conv5')
     x = gen_conv(x, cnum*4, 3, (1,1), padding, activation="elu", name='conv6')
-    x = gen_conv(x, cnum*4, 3, (1,1), padding, dilation_rate=(2,2), activation="elu", name='conv7')
-    x = gen_conv(x, cnum*4, 3, (1,1), padding, dilation_rate=(4,4), activation="elu", name='conv8')
-    x = gen_conv(x, cnum*4, 3, (1,1), padding, dilation_rate=(8,8), activation="elu", name='conv9')
-    x = gen_conv(x, cnum*4, 3, (1,1), padding, dilation_rate=(16,16), activation="elu", name='conv10')
+    x_shape = x.get_shape().as_list()[1:3]
+    mask_s = layers.experimental.preprocessing.Resizing(x_shape[0], x_shape[1], 'nearest')(mask)
+    x = gen_conv(x, cnum*4, 3, (1,1), padding, dilation_rate=(2,2), activation="elu", name='conv7_astrous')
+    x = gen_conv(x, cnum*4, 3, (1,1), padding, dilation_rate=(4,4), activation="elu", name='conv8_astrous')
+    x = gen_conv(x, cnum*4, 3, (1,1), padding, dilation_rate=(8,8), activation="elu", name='conv9_astrous')
+    x = gen_conv(x, cnum*4, 3, (1,1), padding, dilation_rate=(16,16), activation="elu", name='conv10_astrous')
     x = gen_conv(x, cnum*4, 3, (1,1), padding, activation="elu", name='conv11')
     x = layers.Conv2D(cnum*4, 3, (1,1), padding, activation="tanh", name='conv12')(x)
-    encoder_output = x
 
     x = layers.UpSampling2D(size=(2, 2), interpolation="nearest", name='up1')(x)
     x = gen_conv(x, cnum*2, 3, (1,1), padding, activation="elu", name='conv13')
     x = gen_conv(x, cnum*2, 3, (1,1), padding, activation="elu", name='conv14')
     x = layers.UpSampling2D(size=(2, 2), interpolation="nearest", name='up2')(x)
     x = gen_conv(x, cnum, 3, (1,1), padding, activation="elu", name='conv15')
-    x = gen_conv(x, cnum/2, 3, (1,1), padding, activation="elu", name='conv16')
+    x = gen_conv(x, cnum//2, 3, (1,1), padding, activation="elu", name='conv16')
     x = layers.Conv2D(1, 3, (1,1), padding, activation="tanh", name='conv17')(x)
-    decoder_output = x
+    x_stage1 = x
 
-    autoencoder = keras.Model(inputs, decoder_output, name="autoencoder")
+    # autoencoder = keras.Model(inputs, decoder_output, name="autoencoder")
+
+    x = x*mask + xin*(1.-mask)
+    xnow = x
+    x = gen_conv(xnow, cnum, 5, (1,1), padding, activation="elu", name='xconv1')
+    x = gen_conv(x, cnum, 3, (2,2), padding, activation="elu", name='xconv2_ds')
+    x = gen_conv(x, cnum*2, 3, (1,1), padding, activation="elu", name='xconv3')
+    x = gen_conv(x, cnum*2, 3, (2,2), padding, activation="elu", name='xconv4_ds')
+    x = gen_conv(x, cnum*4, 3, (1,1), padding, activation="elu", name='xconv5')
+    x = gen_conv(x, cnum*4, 3, (1,1), padding, activation="elu", name='xconv6')
+    x = gen_conv(x, cnum*4, 3, (1,1), padding, dilation_rate=(2,2), activation="elu", name='xconv7_astrous')
+    x = gen_conv(x, cnum*4, 3, (1,1), padding, dilation_rate=(4,4), activation="elu", name='xconv8_astrous')
+    x = gen_conv(x, cnum*4, 3, (1,1), padding, dilation_rate=(8,8), activation="elu", name='xconv9_astrous')
+    x = gen_conv(x, cnum*4, 3, (1,1), padding, dilation_rate=(16,16), activation="elu", name='xconv10_astrous')
+    x_hallu = x
+    # attention branch
+    x = gen_conv(xnow, cnum, 5, (1,1), padding, activation="elu", name='pmconv1')
+    x = gen_conv(x, cnum, 3, (2,2), padding, activation="elu", name='pmconv2_ds')
+    x = gen_conv(x, cnum*2, 3, (1,1), padding, activation="elu", name='pmconv3')
+    x = gen_conv(x, cnum*2, 3, (2,2), padding, activation="elu", name='pmconv4_ds')
+    x = gen_conv(x, cnum*4, 3, (1,1), padding, activation="elu", name='pmconv5')
+    x = gen_conv(x, cnum*4, 3, (1,1), padding, activation="relu", name='pmconv6')
+    x, offset_flow = contextual_attention(x, x, mask_s, 3, 1, rate=2)
+    x = gen_conv(x, cnum*4, 3, (1,1), padding, activation="elu", name='pmconv9')
+    x = gen_conv(x, cnum*4, 3, (1,1), padding, activation="elu", name='pmconv10')
+    pm = x
+    x = tf.concat([x_hallu, pm], axis=3)
+
+    x = gen_conv(x, cnum*4, 3, (1,1), padding, activation="elu", name='allconv11')
+    x = gen_conv(x, cnum*4, 3, (1,1), padding, activation="elu", name='allconv12')
+    x = layers.UpSampling2D(size=(2, 2), interpolation="nearest", name='allup1')(x)
+    x = gen_conv(x, cnum*2, 3, (1,1), padding, activation="elu", name='allconv13')
+    x = gen_conv(x, cnum*2, 3, (1,1), padding, activation="elu", name='allconv14')
+    x = layers.UpSampling2D(size=(2, 2), interpolation="nearest", name='allup2')(x)
+    x = gen_conv(x, cnum, 3, (1,1), padding, activation="elu", name='allconv15')
+    x = gen_conv(x, cnum//2, 3, (1,1), padding, activation="elu", name='allconv16')
+    x = layers.Conv2D(1, 3, (1,1), padding, activation="tanh", name='allconv17')(x)
+    x_stage2 = x
+
+    outputs = [x_stage1, x_stage2]
+    inpaint_net = keras.Model(inputs=[xin, mask], outputs=outputs, name='inpaint_net')
 
     # self train loop should comduct loss within loop. So no auto reduction here.
     #loss_fn = tf.keras.losses.MeanAbsoluteError(reduction='sum_over_batch_size')
-    loss_fn = tf.keras.losses.MeanAbsoluteError(reduction=tf.keras.losses.Reduction.NONE)
+    #loss_fn = tf.keras.losses.MeanAbsoluteError(reduction=tf.keras.losses.Reduction.NONE)
 
-    optimizer = keras.optimizers.Adam(1e-4, beta_1=0.5, beta_2=0.999)
+    #optimizer = keras.optimizers.Adam(1e-4, beta_1=0.5, beta_2=0.999)
     ''' for keras model fit
     autoencoder.compile(
-    	optimizer=keras.optimizers.Adam(1e-4, beta_1=0.5, beta_2=0.999),
+        optimizer=keras.optimizers.Adam(1e-4, beta_1=0.5, beta_2=0.999),
         loss=loss_fn,
         metrics=["mean_absolute_error"],
     )
     '''
-    return autoencoder, optimizer, loss_fn
+    return inpaint_net

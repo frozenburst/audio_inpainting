@@ -1,5 +1,5 @@
 from data_loader import load_npy, load_data_filename
-from models import auto_encoder
+from models import inpaint_net
 from summary_ops import scalar_summary, images_summary
 from inpaint_ops import random_bbox, bbox2mask
 from tqdm import tqdm
@@ -14,20 +14,23 @@ print(tf.__version__)
 
 class hp:
     # Training setting
-    training_file = './data/train_list.txt'
-    testing_file = './data/test_list.txt'
-    logdir = './logs'
-    checkpoint_dir = './checkpoints/ckpt_2rd'
-    checkpoint_prefix = op.join(checkpoint_dir, "ckpt")
-    checkpoint_restore_dir = './checkpoints/ckpt'
+    data_file = 'spec_large'
+    save_descript = '_net'
+    training_file = op.join('./data', data_file, 'train_list.txt')
+    testing_file = op.join('./data', data_file, 'test_list.txt')
+    logdir = op.join('./logs', f'{data_file}{save_descript}')
+    #checkpoint_dir = op.join('./checkpoints', data_file)
+    checkpoint_prefix = op.join(logdir, "ckpt")
+    checkpoint_restore_dir = ''
     checkpoint_freq = 2
-    epochs = 50
-    steps_per_epoch = -1 # -1: whole training data
+    restore_epochs = 0  # Specify for restore training.
+    epochs = 10
+    steps_per_epoch = 10  # -1: whole training data.
     validation_split = 0.1
     batch = True
     batch_size = 32
     max_outputs = 10
-    profile = True # profile on first epoch, batch 10~20
+    profile = False  # profile on first epoch, batch 10~20.
     # Data
     image_height = 256
     image_width = 256
@@ -97,7 +100,9 @@ if __name__ == "__main__":
 
     with strategy.scope():
         print("Build model...")
-        model, optimizer, loss_fn = auto_encoder(hp.image_height, hp.image_width)
+        model = inpaint_net(hp.image_height, hp.image_width)
+        optimizer = tf.keras.optimizers.Adam(1e-4, beta_1=0.5, beta_2=0.999)
+        loss_fn = tf.keras.losses.MeanAbsoluteError(reduction=tf.keras.losses.Reduction.NONE)
         print(model.summary())
         checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=model)
         # Restore if the path given
@@ -114,7 +119,6 @@ if __name__ == "__main__":
             per_example_loss = loss_fn(ref, predictions)
             return tf.nn.compute_average_loss(per_example_loss, global_batch_size=GLOBAL_BATCH_SIZE)
 
-
         def create_mask():
             bbox = random_bbox(hp)
             regular_mask = bbox2mask(hp, bbox)
@@ -128,20 +132,24 @@ if __name__ == "__main__":
             mask = create_mask()
             x_incomplete = x * (1.-mask)
 
-            ones_x = tf.ones_like(x_incomplete)
-            model_input = tf.concat([x_incomplete, ones_x*mask], axis=3)
+            #ones_x = tf.ones_like(x_incomplete)
+            #model_input = tf.concat([x_incomplete, ones_x*mask], axis=3)
+            model_input = [x_incomplete, mask]
 
             with tf.GradientTape() as tape:
-                predictions = model(inputs=model_input, training=True)
-                loss = compute_loss(y, predictions)
+                #predictions = model(inputs=model_input, training=True)
+                x_stage1, x_stage2 = model(inputs=model_input, training=True)
+                #loss = compute_loss(y, predictions)
+                loss = compute_loss(y, x_stage1)
+                loss += compute_loss(y, x_stage2)
 
             gradients = tape.gradient(loss, model.trainable_variables)
             optimizer.apply_gradients(zip(gradients, model.trainable_variables))
 
             # This is counted without GLOBAL_BATCH_SIZE
-            train_accuracy.update_state(y, predictions)
+            train_accuracy.update_state(y, x_stage2)
 
-            summary_images = [x_incomplete, predictions, y]
+            summary_images = [x_incomplete, x_stage1, x_stage2, y]
             summary_images = tf.concat(summary_images, axis=2)
             return loss, summary_images
 
@@ -151,14 +159,14 @@ if __name__ == "__main__":
 
             mask = create_mask()
             x_incomplete = x * (1.-mask)
-            ones_x = tf.ones_like(x_incomplete)
-            model_input = tf.concat([x_incomplete, ones_x*mask], axis=3)
+            model_input = [x_incomplete, mask]
 
-            predictions = model(model_input, training=False)
-            t_loss = loss_fn(y, predictions)
+            x_stage1, x_stage2 = model(model_input, training=False)
+            t_loss = loss_fn(y, x_stage1)
+            t_loss += loss_fn(y, x_stage2)
 
             test_loss.update_state(t_loss)
-            test_accuracy.update_state(y, predictions)
+            test_accuracy.update_state(y, x_stage2)
 
         @tf.function
         def distributed_train_step(dataset_inputs):
@@ -170,7 +178,7 @@ if __name__ == "__main__":
             return strategy.run(test_step, args=(dataset_inputs,))
 
         # Experiment Epoch
-        for epoch in range(hp.epochs):
+        for epoch in range(hp.restore_epochs, hp.epochs+hp.restore_epochs):
             total_loss = 0.0
             num_batches = 0
             summary_images_list = []
@@ -184,11 +192,12 @@ if __name__ == "__main__":
                 num_batches += 1
 
                 # Cast tensor from Replica
-                if strategy.num_replicas_in_sync > 1:
-                    summary_images = summary_images.values
-                    # concat on batch channel: n * [b, h, w, c] -> b*n, h, w, c
-                    summary_images = tf.concat(summary_images, axis=0)
-                summary_images_list.append(summary_images)
+                if batch_step == 0: # Only collect first batch due to OOM
+                    if strategy.num_replicas_in_sync > 1:
+                        summary_images = summary_images.values
+                        # concat on batch channel: n * [b, h, w, c] -> b*n, h, w, c
+                        summary_images = tf.concat(summary_images, axis=0)
+                    summary_images_list.append(summary_images)
 
                 if hp.profile:
                     if epoch == 0 and batch_step == 9:
@@ -201,8 +210,9 @@ if __name__ == "__main__":
             train_loss = total_loss / num_batches
 
             ### Testing loop
-            for x in test_dist_dataset:
+            for x in tqdm(test_dist_dataset):
                 distributed_test_step(x)
+                break
 
             # Checkpoint save.
             if epoch % hp.checkpoint_freq == 0:
@@ -226,4 +236,3 @@ if __name__ == "__main__":
             test_loss.reset_states()
             train_accuracy.reset_states()
             test_accuracy.reset_states()
-
