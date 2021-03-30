@@ -9,6 +9,8 @@ from tensorflow.keras.layers import Conv2D, MaxPooling2D
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.optimizers import SGD
 
+from inpaint_ops import gen_conv
+
 
 def one_dense_layer(num_classes=50):
     model = tf.keras.Sequential([
@@ -126,34 +128,35 @@ def xception(num_classes=50, img_height=256, img_width=256, training=True):
 
 def auto_encoder(img_height=256, img_width=256, training=True):
 
-    encoder_input = keras.Input(shape=(img_height, img_width, 1), name="spec")
+    inputs = keras.Input(shape=(img_height, img_width, 2), name="spec")
+    xin, mask = tf.split(inputs, num_or_size_splits=2, axis=3)
 
     cnum = 48
     padding = 'same'
-    x = layers.Conv2D(cnum, 3, (1,1), padding, activation="elu", name='conv1')(encoder_input)
-    x = layers.Conv2D(cnum*2, 3, (2,2), padding, activation="elu", name='conv2_ds')(x)
-    x = layers.Conv2D(cnum*2, 3, (1,1), padding, activation="elu", name='conv3')(x)
-    x = layers.Conv2D(cnum*4, 3, (2,2), padding, activation="elu", name='conv4_ds')(x)
-    x = layers.Conv2D(cnum*4, 3, (1,1), padding, activation="elu", name='conv5')(x)
-    x = layers.Conv2D(cnum*4, 3, (1,1), padding, activation="elu", name='conv6')(x)
-    x = layers.Conv2D(cnum*4, 3, (1,1), padding, dilation_rate=(2,2), activation="elu", name='conv7')(x)
-    x = layers.Conv2D(cnum*4, 3, (1,1), padding, dilation_rate=(4,4), activation="elu", name='conv8')(x)
-    x = layers.Conv2D(cnum*4, 3, (1,1), padding, dilation_rate=(8,8), activation="elu", name='conv9')(x)
-    x = layers.Conv2D(cnum*4, 3, (1,1), padding, dilation_rate=(16,16), activation="elu", name='conv10')(x)
-    x = layers.Conv2D(cnum*4, 3, (1,1), padding, activation="elu", name='conv11')(x)
+    x = gen_conv(inputs, cnum, 3, (1,1), padding, activation="elu", name='conv1')
+    x = gen_conv(x, cnum*2, 3, (2,2), padding, activation="elu", name='conv2_ds')
+    x = gen_conv(x, cnum*2, 3, (1,1), padding, activation="elu", name='conv3')
+    x = gen_conv(x, cnum*4, 3, (2,2), padding, activation="elu", name='conv4_ds')
+    x = gen_conv(x, cnum*4, 3, (1,1), padding, activation="elu", name='conv5')
+    x = gen_conv(x, cnum*4, 3, (1,1), padding, activation="elu", name='conv6')
+    x = gen_conv(x, cnum*4, 3, (1,1), padding, dilation_rate=(2,2), activation="elu", name='conv7')
+    x = gen_conv(x, cnum*4, 3, (1,1), padding, dilation_rate=(4,4), activation="elu", name='conv8')
+    x = gen_conv(x, cnum*4, 3, (1,1), padding, dilation_rate=(8,8), activation="elu", name='conv9')
+    x = gen_conv(x, cnum*4, 3, (1,1), padding, dilation_rate=(16,16), activation="elu", name='conv10')
+    x = gen_conv(x, cnum*4, 3, (1,1), padding, activation="elu", name='conv11')
     x = layers.Conv2D(cnum*4, 3, (1,1), padding, activation="tanh", name='conv12')(x)
     encoder_output = x
 
     x = layers.UpSampling2D(size=(2, 2), interpolation="nearest", name='up1')(x)
-    x = layers.Conv2D(cnum*2, 3, (1,1), padding, activation="elu", name='conv13')(x)
-    x = layers.Conv2D(cnum*2, 3, (1,1), padding, activation="elu", name='conv14')(x)
+    x = gen_conv(x, cnum*2, 3, (1,1), padding, activation="elu", name='conv13')
+    x = gen_conv(x, cnum*2, 3, (1,1), padding, activation="elu", name='conv14')
     x = layers.UpSampling2D(size=(2, 2), interpolation="nearest", name='up2')(x)
-    x = layers.Conv2D(cnum, 3, (1,1), padding, activation="elu", name='conv15')(x)
-    x = layers.Conv2D(cnum/2, 3, (1,1), padding, activation="elu", name='conv16')(x)
+    x = gen_conv(x, cnum, 3, (1,1), padding, activation="elu", name='conv15')
+    x = gen_conv(x, cnum/2, 3, (1,1), padding, activation="elu", name='conv16')
     x = layers.Conv2D(1, 3, (1,1), padding, activation="tanh", name='conv17')(x)
     decoder_output = x
 
-    autoencoder = keras.Model(encoder_input, decoder_output, name="autoencoder")
+    autoencoder = keras.Model(inputs, decoder_output, name="autoencoder")
 
     # self train loop should comduct loss within loop. So no auto reduction here.
     #loss_fn = tf.keras.losses.MeanAbsoluteError(reduction='sum_over_batch_size')

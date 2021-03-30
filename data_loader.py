@@ -9,18 +9,26 @@ def load_npy(filename):
 
     #if label:
     #    return data, label
-    return data, data
+    return data
 
 
-def load_data_filename(filename):
+def load_data_filename(filename, islabeled=False):
     data_fnames = []
     labels = []
-    with open(filename, 'r') as f:
-        data_list = f.read().splitlines()
-        for line in tqdm(data_list):
-            data_name = line.split(' ')[0]
-            data_fnames.append(data_name)
-            labels.append(int(line.split(' ')[1]))
+    if islabeled:
+        with open(filename, 'r') as f:
+            data_list = f.read().splitlines()
+            for line in tqdm(data_list):
+                data_name = line.split(' ')[0]
+                data_fnames.append(data_name)
+                labels.append(int(line.split(' ')[1]))
+    else:
+        with open(filename, 'r') as f:
+            data_list = f.read().splitlines()
+            for line in tqdm(data_list):
+                data_name = line
+                data_fnames.append(data_name)
+
     return np.array(data_fnames), np.array(labels)
 
 def get_class_name():
