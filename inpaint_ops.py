@@ -1,5 +1,6 @@
 import numpy as np
 import tensorflow as tf
+import tensorflow_addons as tfa
 
 from tensorflow.keras import layers
 
@@ -23,6 +24,39 @@ def gen_conv(x, cnum, ksize, stride=(1,1), padding='same',
     y = tf.keras.activations.sigmoid(y)
     x = x * y
     return x
+
+
+def dis_conv(x, cnum, ksize=(5,5), strides=(2,2), padding='same', name='conv', training=True):
+    """Define conv for discriminator.
+    Activation is set to leaky_relu.
+    Args:
+        x: Input.
+        cnum: Channel number.
+        ksize: Kernel size.
+        Stride: Convolution stride.
+        name: Name of layers.
+        training: If current graph is for training or inference, used for bn.
+    Returns:
+        tf.Tensor: output
+    """
+    x = tfa.layers.SpectralNormalization(
+            layers.Conv2D(cnum, ksize, strides, padding, activation=None, name=name))(x)
+
+    x = layers.LeakyReLU()(x)
+    return x
+
+
+def gan_hinge_loss(pos, neg, value=1., name='gan_hinge_loss'):
+    """
+    gan with hinge loss:
+    https://github.com/pfnet-research/sngan_projection/blob/c26cedf7384c9776bcbe5764cb5ca5376e762007/updater.py
+    """
+    hinge_pos = tf.math.reduce_mean(tf.nn.relu(1.-pos))
+    hinge_neg = tf.math.reduce_mean(tf.nn.relu(1.+neg))
+
+    d_loss = tf.math.add(.5 * hinge_pos, .5 * hinge_neg)
+    g_loss = -tf.math.reduce_mean(neg)
+    return g_loss, d_loss
 
 
 def random_bbox(hp):
@@ -220,10 +254,11 @@ def contextual_attention(f, b, mask=None, ksize=3, stride=1, rate=1,
     # # case2: visualize which pixels are attended
     # flow = highlight_flow_tf(offsets * tf.cast(mask, tf.int32))
     if rate != 1:
+        pass
         # [16, 64, 64, 1]
         # flow = resize(flow, scale=rate, func=tf.image.resize_bilinear)
         #flow shape
-        flow = layers.experimental.preprocessing.Resizing()
+        #flow = layers.experimental.preprocessing.Resizing()
     return y, flow
 
 

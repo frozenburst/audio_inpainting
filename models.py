@@ -3,8 +3,7 @@ import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers
 
-from inpaint_ops import gen_conv
-from inpaint_ops import resize_mask_like
+from inpaint_ops import gen_conv, dis_conv
 # from inpaint_ops import contextual_attention
 
 
@@ -69,7 +68,7 @@ def inpaint_net(img_height=256, img_width=256, training=True):
     x = gen_conv(x, cnum*2, 3, (2,2), padding, activation="elu", name='pmconv4_ds')
     x = gen_conv(x, cnum*4, 3, (1,1), padding, activation="elu", name='pmconv5')
     x = gen_conv(x, cnum*4, 3, (1,1), padding, activation="relu", name='pmconv6')
-    x, offset_flow = contextual_attention(x, x, mask_s, 3, 1, rate=2)
+    # x, offset_flow = contextual_attention(x, x, mask_s, 3, 1, rate=2)
     x = gen_conv(x, cnum*4, 3, (1,1), padding, activation="elu", name='pmconv9')
     x = gen_conv(x, cnum*4, 3, (1,1), padding, activation="elu", name='pmconv10')
     pm = x
@@ -102,3 +101,20 @@ def inpaint_net(img_height=256, img_width=256, training=True):
     )
     '''
     return inpaint_net
+
+
+def sn_patch_gan_discriminator(img_height=256, img_width=256, training=True):
+    xin = keras.Input(shape=(img_height, img_width, 2), name='img')
+
+    cnum = 64
+    x = dis_conv(xin, cnum, name='disconv1', training=training)
+    x = dis_conv(x, cnum*2, name='disconv2', training=training)
+    x = dis_conv(x, cnum*4, name='disconv3', training=training)
+    x = dis_conv(x, cnum*4, name='disconv4', training=training)
+    x = dis_conv(x, cnum*4, name='disconv5', training=training)
+    x = dis_conv(x, cnum*4, name='disconv6', training=training)
+    x = layers.Flatten()(x)
+    output = x
+
+    sn_patch_gan_d = keras.Model(inputs=xin, outputs=output, name='sn_patch_gan_d')
+    return sn_patch_gan_d
