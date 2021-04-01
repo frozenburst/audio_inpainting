@@ -7,6 +7,6 @@ data/
 checkpoints/
 models/
 example/
-logs/
+*logs/
 
 *.swp

@@ -20,7 +20,7 @@ class hp:
     save_descript = '_net_wD_woCA'
     training_file = op.join('./data', data_file, 'train_list.txt')
     testing_file = op.join('./data', data_file, 'test_list.txt')
-    logdir = op.join('./logs', f'{data_file}{save_descript}')
+    logdir = op.join('./tf_logs', f'{data_file}{save_descript}')
     #checkpoint_dir = op.join('./checkpoints', data_file)
     checkpoint_prefix = op.join(logdir, "ckpt")
     checkpoint_restore_dir = ''
@@ -180,7 +180,7 @@ if __name__ == "__main__":
             summary_images = tf.concat(summary_images, axis=2)
 
             train_accuracy.update_state(x_pos, x_complete)
-            return g_loss, summary_images
+            return loss, summary_images
 
         def test_step(inputs):
             x_pos = inputs
@@ -200,10 +200,10 @@ if __name__ == "__main__":
         @tf.function
         def distributed_train_step(dataset_inputs):
             per_replica_losses, summary_images = strategy.run(train_step, args=(dataset_inputs,))
-            #per_replica_losses['g_loss'] = strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_losses['g_loss'], axis=None)
-            #per_replica_losses['d_loss'] = strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_losses['d_loss'], axis=None)
-            #per_replica_losses['ae_loss'] = strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_losses['ae_loss'], axis=None)
-            return strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_losses, axis=None), summary_images
+            per_replica_losses['g_loss'] = strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_losses['g_loss'], axis=None)
+            per_replica_losses['d_loss'] = strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_losses['d_loss'], axis=None)
+            per_replica_losses['ae_loss'] = strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_losses['ae_loss'], axis=None)
+            return per_replica_losses, summary_images
 
         @tf.function
         def distributed_test_step(dataset_inputs):
@@ -211,8 +211,8 @@ if __name__ == "__main__":
 
         # Experiment Epoch
         for epoch in range(hp.restore_epochs, hp.epochs+hp.restore_epochs):
-            #total_loss = {'g_loss': 0.0, 'd_loss': 0.0, 'ae_loss': 0.0}
-            total_loss = 0.0
+            total_loss = {'g_loss': 0.0, 'd_loss': 0.0, 'ae_loss': 0.0}
+            #total_loss = 0.0
             num_batches = 0
             summary_images_list = []
 
@@ -221,10 +221,10 @@ if __name__ == "__main__":
             for batch_step in tqdm(range(steps_per_epoch)):
                 # The step here refers to whole batch
                 step_loss, summary_images = distributed_train_step(next(train_iter))
-                #total_loss['g_loss'] += step_loss['g_loss']
-                #total_loss['d_loss'] += step_loss['d_loss']
-                #total_loss['ae_loss'] += step_loss['ae_loss']
-                total_loss += step_loss
+                total_loss['g_loss'] += step_loss['g_loss']
+                total_loss['d_loss'] += step_loss['d_loss']
+                total_loss['ae_loss'] += step_loss['ae_loss']
+                # total_loss += step_loss
                 num_batches += 1
 
                 # Cast tensor from Replica
@@ -243,10 +243,10 @@ if __name__ == "__main__":
 
             # concat all sample on batch channel
             summary_images_list = tf.concat(summary_images_list, axis=0)
-            total_loss = total_loss / num_batches
-            #total_loss['g_loss'] = total_loss['g_loss'] / num_batches
-            #total_loss['d_loss'] = total_loss['d_loss'] / num_batches
-            #total_loss['ae_loss'] = total_loss['ae_loss'] / num_batches
+            # total_loss = total_loss / num_batches
+            total_loss['g_loss'] = total_loss['g_loss'] / num_batches
+            total_loss['d_loss'] = total_loss['d_loss'] / num_batches
+            total_loss['ae_loss'] = total_loss['ae_loss'] / num_batches
 
             ### Testing loop
             for x in tqdm(test_dist_dataset):
@@ -258,7 +258,7 @@ if __name__ == "__main__":
 
             # Write to tensorboard.
             with file_summary_writer.as_default():
-                #dict_scalar_summary('train loss', total_loss, step=epoch)
+                dict_scalar_summary('train loss', total_loss, step=epoch)
                 scalar_summary('train MAE loss', train_accuracy.result(), step=epoch)
                 images_summary("Training result", summary_images_list, step=epoch, max_outputs=hp.max_outputs)
 
@@ -267,7 +267,7 @@ if __name__ == "__main__":
 
             template = ("Epoch {}, Loss: {}, MAE loss: {}, Test Loss: {}, "
                         "Test MAE loss: {}")
-            print(template.format(epoch+1, total_loss,
+            print(template.format(epoch+1, total_loss['g_loss'],
                                   train_accuracy.result()*100, test_loss.result(),
                                   test_accuracy.result()*100))
 
