@@ -148,8 +148,8 @@ if __name__ == "__main__":
             with tf.GradientTape() as g_tape, tf.GradientTape() as d_tape:
                 # Generator
                 #x_stage1, x_stage2 = g_model(inputs=model_input, training=True)
-                x_stage1, x_stage2, x_s_in, offset_flow, offset_flow_m = g_model(inputs=model_input, training=True)
-                # x_stage1, x_stage2, x_s_in = g_model(inputs=model_input, training=True)
+                #x_stage1, x_stage2, x_s_in, offset_flow = g_model(inputs=model_input, training=True)
+                x_stage1, x_stage2, x_s_in, offset_flow = g_model(inputs=model_input, training=True)
 
                 x_predicted = x_stage2
                 x_complete = x_predicted * mask + x_incomplete * (1.-mask)
@@ -178,7 +178,8 @@ if __name__ == "__main__":
             loss['d_loss'] = d_loss
             loss['g_loss'] = g_loss_0
 
-            summary_images = [x_incomplete, x_stage1, x_stage2, x_pos, x_s_in, offset_flow, offset_flow_m]
+            #summary_images = [x_incomplete, x_stage1, x_stage2, x_pos, x_s_in, offset_flow]
+            summary_images = [x_incomplete, x_stage1, x_stage2, x_pos, x_s_in]
             summary_images = tf.concat(summary_images, axis=2)
 
             train_accuracy.update_state(x_pos, x_complete)

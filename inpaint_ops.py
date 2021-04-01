@@ -261,14 +261,16 @@ def contextual_attention(f, b, mask=None, ksize=3, stride=1, rate=1,
         # [16, 64, 64, 1]
         # flow = resize(flow, scale=rate, func=tf.image.resize_bilinear)
         # flow shape
-        breakpoint()
+        #breakpoint()
+        #flow = tf.zeros([batch_size, 32, 32, 1])
+        #flow_2 = tf.zeros([batch_size, 32, 32, 1])
         flow_shape = flow.get_shape().as_list()
         flow = layers.experimental.preprocessing.Resizing(
                 int(flow_shape[1]*rate), int(flow_shape[2]*rate), 'nearest')(flow)
 
-        flow_2_shape = flow_2.get_shape().as_list()
-        flow_2 = layers.experimental.preprocessing.Resizing(
-                    int(flow_2_shape[1]*rate), int(flow_2_shape[2]*rate), 'nearest')(flow_2)
+        #flow_2_shape = flow_2.get_shape().as_list()
+        #flow_2 = layers.experimental.preprocessing.Resizing(
+        #            int(flow_2_shape[1]*rate), int(flow_2_shape[2]*rate), 'nearest')(flow_2)
     return y, flow, flow_2
 
 
