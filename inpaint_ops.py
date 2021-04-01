@@ -109,13 +109,13 @@ def bbox2mask(hp, bbox, name='mask'):
 
 
 def contextual_attention(f, b, mask=None, ksize=3, stride=1, rate=1,
-                         fuse_k=3, softmax_scale=10., training=True, fuse=True):
+                         fuse_k=3, softmax_scale=10., training=True, fuse=True, batch_size=32):
     """ Contextual attention layer implementation.
     Contextual attention is first introduced in publication:
         Generative Image Inpainting with Contextual Attention, Yu et al.
     Args:
         x: Input feature to match (foreground).
-        t: Input feature for match (background).
+        b: Input feature for match (background).
         mask: Input mask for t, indicating patches not available.
         ksize: Kernel size for contextual attention.
         stride: Stride for extracting patches from t.
@@ -138,8 +138,11 @@ def contextual_attention(f, b, mask=None, ksize=3, stride=1, rate=1,
     #    b, [1,kernel,kernel,1], [1,rate*stride,rate*stride,1], [1,1,1,1], padding='SAME')
     raw_w = tf.image.extract_patches(
         b, [1,kernel,kernel,1], [1,rate*stride,rate*stride,1], [1,1,1,1], padding='SAME')
+    #raw_w = tf.zeros([batch_size, 32, 32, 1536])
+
     # [16, 1024, 4, 4, 96]: 1024(total patches) * 4*4(each patch)
-    raw_w = tf.reshape(raw_w, [raw_int_bs[0], -1, kernel, kernel, raw_int_bs[3]])
+    # raw_w = tf.reshape(raw_w, [raw_int_bs[0], -1, kernel, kernel, raw_int_bs[3]])
+    raw_w = tf.reshape(raw_w, [tf.shape(b)[0], -1, kernel, kernel, raw_int_bs[3]])
     # [16, 4, 4, 96, 1024]
     raw_w = tf.transpose(raw_w, [0, 2, 3, 4, 1])  # transpose to b*k*k*c*hw
     # downscaling foreground option: downscaling both foreground and
@@ -152,12 +155,13 @@ def contextual_attention(f, b, mask=None, ksize=3, stride=1, rate=1,
     if mask is not None:
         # mask = resize(mask, scale=1./rate, func=tf.image.resize_nearest_neighbor)
         mask_shape = mask.get_shape().as_list()
-        mask =  layers.experimental.preprocessing.Resizing(int(mask_shape[1]/rate), int(mask_shape[2]/rate), 'nearest')(mask)
+        mask = layers.experimental.preprocessing.Resizing(int(mask_shape[1]/rate), int(mask_shape[2]/rate), 'nearest')(mask)
     # get shape after resize
     fs = tf.shape(f)
     int_fs = f.get_shape().as_list()
     # split f with each batch -> 16 * [1, 32, 32, 96] to group
-    f_groups = tf.split(f, int_fs[0], axis=0)
+    #f_groups = tf.split(f, int_fs[0], axis=0)
+    f_groups = tf.split(f, batch_size, axis=0)
     # from t(H*W*C) to w(b*k*k*c*h*w)
     bs = tf.shape(b)
     int_bs = b.get_shape().as_list()
@@ -166,16 +170,17 @@ def contextual_attention(f, b, mask=None, ksize=3, stride=1, rate=1,
     #    b, [1,ksize,ksize,1], [1,stride,stride,1], [1,1,1,1], padding='SAME')
     w = tf.image.extract_patches(
         b, [1,ksize,ksize,1], [1,stride,stride,1], [1,1,1,1], padding='SAME')
+
     # [16, 1024(h*w), 3, 3, 96]
-    w = tf.reshape(w, [int_fs[0], -1, ksize, ksize, int_fs[3]])
+    w = tf.reshape(w, [tf.shape(f)[0], -1, ksize, ksize, int_fs[3]])
     # [16, 3, 3, 96, 1024]
     w = tf.transpose(w, [0, 2, 3, 4, 1])  # transpose to b*k*k*c*hw
     # process mask
     # [1, 32, 32, 1]
     if mask is None:
-        mask = tf.zeros([1, bs[1], bs[2], 1])
+        mask = tf.zeros([1, int_bs[1], int_bs[2], 1])
     # m: [1, 32, 32, 9]
-    m = tf.extract_image_patches(
+    m = tf.image.extract_patches(
         mask, [1,ksize,ksize,1], [1,stride,stride,1], [1,1,1,1], padding='SAME')
     # [1, 1024, 3, 3, 1]
     m = tf.reshape(m, [1, -1, ksize, ksize, 1])
@@ -187,9 +192,9 @@ def contextual_attention(f, b, mask=None, ksize=3, stride=1, rate=1,
     # equal return True or False by condition, cast convert True->1 False->0.
     mm = tf.cast(tf.math.equal(tf.math.reduce_mean(m, axis=[0,1,2], keepdims=True), 0.), tf.float32)
     # 16 * [1, 3, 3, 96, 1024]: after resize
-    w_groups = tf.split(w, int_bs[0], axis=0)
+    w_groups = tf.split(w, batch_size, axis=0)
     # 16 * [1, 4, 4, 96, 1024]: original size
-    raw_w_groups = tf.split(raw_w, int_bs[0], axis=0)
+    raw_w_groups = tf.split(raw_w, batch_size, axis=0)
     y = []
     offsets = []
     k = fuse_k  # 3
@@ -202,7 +207,6 @@ def contextual_attention(f, b, mask=None, ksize=3, stride=1, rate=1,
         wi_normed = wi / tf.math.maximum(tf.math.sqrt(tf.math.reduce_sum(tf.math.square(wi), axis=[0,1,2])), 1e-4)
         # [1, 32, 32, 1024]
         yi = tf.nn.conv2d(xi, wi_normed, strides=[1,1,1,1], padding="SAME")
-
         # conv implementation for fuse scores to encourage large patches
         if fuse:
             # [1, 1024, 1024, 1]
@@ -252,14 +256,20 @@ def contextual_attention(f, b, mask=None, ksize=3, stride=1, rate=1,
     # [16, 32, 32, 1]
     flow = flow_to_image_tf(offsets)
     # # case2: visualize which pixels are attended
-    # flow = highlight_flow_tf(offsets * tf.cast(mask, tf.int32))
+    flow_2 = highlight_flow_tf(offsets * tf.cast(mask, tf.int32))
     if rate != 1:
-        pass
         # [16, 64, 64, 1]
         # flow = resize(flow, scale=rate, func=tf.image.resize_bilinear)
-        #flow shape
-        #flow = layers.experimental.preprocessing.Resizing()
-    return y, flow
+        # flow shape
+        breakpoint()
+        flow_shape = flow.get_shape().as_list()
+        flow = layers.experimental.preprocessing.Resizing(
+                int(flow_shape[1]*rate), int(flow_shape[2]*rate), 'nearest')(flow)
+
+        flow_2_shape = flow_2.get_shape().as_list()
+        flow_2 = layers.experimental.preprocessing.Resizing(
+                    int(flow_2_shape[1]*rate), int(flow_2_shape[2]*rate), 'nearest')(flow_2)
+    return y, flow, flow_2
 
 
 def make_color_wheel():
@@ -358,12 +368,10 @@ def flow_to_image(flow):
 def flow_to_image_tf(flow, name='flow_to_image'):
     """Tensorflow ops for computing flow to image.
     """
-    with tf.variable_scope(name), tf.device('/cpu:0'):
-        img = tf.py_func(flow_to_image, [flow], tf.float32, stateful=False)
-        img.set_shape(flow.get_shape().as_list()[0:-1]+[1])
-        img = img / 127.5 - 1. # Here is the compute for the flow color
-        #img = img * 2. - 1. # Edit for npy file instead of image. (error)
-        return img
+    img = tf.py_function(flow_to_image, inp=[flow], Tout=tf.float32)
+    img.set_shape(flow.get_shape().as_list()[0:-1]+[1])
+    img = img / 127.5 - 1. # Here is the compute for the flow color
+    return img
 
 
 def highlight_flow(flow):
@@ -387,9 +395,7 @@ def highlight_flow(flow):
 def highlight_flow_tf(flow, name='flow_to_image'):
     """Tensorflow ops for highlight flow.
     """
-    with tf.variable_scope(name), tf.device('/cpu:0'):
-        img = tf.py_func(highlight_flow, [flow], tf.float32, stateful=False)
-        img.set_shape(flow.get_shape().as_list()[0:-1]+[1])
-        img = img / 127.5 - 1. # Normalize flow color
-        # img = img * 2. - 1. # Edit for npy file instead of image. (error)
-        return img
+    img = tf.py_function(highlight_flow, inp=[flow], Tout=tf.float32)
+    img.set_shape(flow.get_shape().as_list()[0:-1]+[1])
+    img = img / 127.5 - 1. # Normalize flow color
+    return img

@@ -4,11 +4,11 @@ from tensorflow import keras
 from tensorflow.keras import layers
 
 from inpaint_ops import gen_conv, dis_conv
-# from inpaint_ops import contextual_attention
+from inpaint_ops import contextual_attention
 
 
 # Reference from GitHub: https://github.com/JiahuiYu/generative_inpainting
-def inpaint_net(img_height=256, img_width=256, training=True):
+def inpaint_net(img_height=256, img_width=256, batch_size=32, training=True):
 
     xin = keras.Input(shape=(img_height, img_width, 1), name="image")
     mask = keras.Input(shape=(img_height, img_width, 1), name="mask")
@@ -49,8 +49,8 @@ def inpaint_net(img_height=256, img_width=256, training=True):
     # autoencoder = keras.Model(inputs, decoder_output, name="autoencoder")
 
     x = x*mask + xin*(1.-mask)
-    xnow = x
-    x = gen_conv(xnow, cnum, 5, (1,1), padding, activation="elu", name='xconv1')
+    x_stage2_input = x
+    x = gen_conv(x_stage2_input, cnum, 5, (1,1), padding, activation="elu", name='xconv1')
     x = gen_conv(x, cnum, 3, (2,2), padding, activation="elu", name='xconv2_ds')
     x = gen_conv(x, cnum*2, 3, (1,1), padding, activation="elu", name='xconv3')
     x = gen_conv(x, cnum*2, 3, (2,2), padding, activation="elu", name='xconv4_ds')
@@ -62,13 +62,14 @@ def inpaint_net(img_height=256, img_width=256, training=True):
     x = gen_conv(x, cnum*4, 3, (1,1), padding, dilation_rate=(16,16), activation="elu", name='xconv10_astrous')
     x_hallu = x
     # attention branch
-    x = gen_conv(xnow, cnum, 5, (1,1), padding, activation="elu", name='pmconv1')
+    x = gen_conv(x_stage2_input, cnum, 5, (1,1), padding, activation="elu", name='pmconv1')
     x = gen_conv(x, cnum, 3, (2,2), padding, activation="elu", name='pmconv2_ds')
     x = gen_conv(x, cnum*2, 3, (1,1), padding, activation="elu", name='pmconv3')
     x = gen_conv(x, cnum*2, 3, (2,2), padding, activation="elu", name='pmconv4_ds')
     x = gen_conv(x, cnum*4, 3, (1,1), padding, activation="elu", name='pmconv5')
     x = gen_conv(x, cnum*4, 3, (1,1), padding, activation="relu", name='pmconv6')
-    # x, offset_flow = contextual_attention(x, x, mask_s, 3, 1, rate=2)
+    x, offset_flow, offset_flow_m = contextual_attention(x, x, mask_s, 3, 1, rate=2, batch_size=batch_size)
+    # x = contextual_attention(f=x, b=x, mask=mask_s, ksize=3, stride=1, rate=2, batch_size=batch_size)
     x = gen_conv(x, cnum*4, 3, (1,1), padding, activation="elu", name='pmconv9')
     x = gen_conv(x, cnum*4, 3, (1,1), padding, activation="elu", name='pmconv10')
     pm = x
@@ -85,7 +86,8 @@ def inpaint_net(img_height=256, img_width=256, training=True):
     x = layers.Conv2D(1, 3, (1,1), padding, activation="tanh", name='allconv17')(x)
     x_stage2 = x
 
-    outputs = [x_stage1, x_stage2]
+    outputs = [x_stage1, x_stage2, x_stage2_input, offset_flow, offset_flow_m]
+    # outputs = [x_stage1, x_stage2, x_stage2_input]
     inpaint_net = keras.Model(inputs=[xin, mask], outputs=outputs, name='inpaint_net')
 
     # self train loop should comduct loss within loop. So no auto reduction here.

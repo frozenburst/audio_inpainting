@@ -17,7 +17,7 @@ class hp:
     # Training setting
     data_file = 'spec_15'
     labeled = True
-    save_descript = '_net_wD_woCA'
+    save_descript = '_net_wD_wCA_test'
     training_file = op.join('./data', data_file, 'train_list.txt')
     testing_file = op.join('./data', data_file, 'test_list.txt')
     logdir = op.join('./tf_logs', f'{data_file}{save_descript}')
@@ -27,12 +27,12 @@ class hp:
     checkpoint_freq = 2
     restore_epochs = 0  # Specify for restore training.
     epochs = 50
-    steps_per_epoch = -1  # -1: whole training data.
+    steps_per_epoch = 10  # -1: whole training data.
     validation_split = 0.1
     batch = True
     batch_size = 32
     max_outputs = 5
-    profile = True  # profile on first epoch, batch 10~20.
+    profile = False  # profile on first epoch, batch 10~20.
     l1_loss_alpha = 1.
     gan_loss_alpha = 1.
     # Data
@@ -104,7 +104,7 @@ if __name__ == "__main__":
 
     with strategy.scope():
         print("Build model...")
-        g_model = inpaint_net(hp.image_height, hp.image_width)
+        g_model = inpaint_net(hp.image_height, hp.image_width, hp.batch_size)
         g_optimizer = tf.keras.optimizers.Adam(1e-4, beta_1=0.5, beta_2=0.999)
         loss_fn = tf.keras.losses.MeanAbsoluteError(reduction=tf.keras.losses.Reduction.NONE)
         print(g_model.summary())
@@ -147,7 +147,9 @@ if __name__ == "__main__":
 
             with tf.GradientTape() as g_tape, tf.GradientTape() as d_tape:
                 # Generator
-                x_stage1, x_stage2 = g_model(inputs=model_input, training=True)
+                #x_stage1, x_stage2 = g_model(inputs=model_input, training=True)
+                x_stage1, x_stage2, x_s_in, offset_flow, offset_flow_m = g_model(inputs=model_input, training=True)
+                # x_stage1, x_stage2, x_s_in = g_model(inputs=model_input, training=True)
 
                 x_predicted = x_stage2
                 x_complete = x_predicted * mask + x_incomplete * (1.-mask)
@@ -176,7 +178,7 @@ if __name__ == "__main__":
             loss['d_loss'] = d_loss
             loss['g_loss'] = g_loss_0
 
-            summary_images = [x_incomplete, x_stage1, x_stage2, x_pos]
+            summary_images = [x_incomplete, x_stage1, x_stage2, x_pos, x_s_in, offset_flow, offset_flow_m]
             summary_images = tf.concat(summary_images, axis=2)
 
             train_accuracy.update_state(x_pos, x_complete)
@@ -233,6 +235,7 @@ if __name__ == "__main__":
                         summary_images = summary_images.values
                         # concat on batch channel: n * [b, h, w, c] -> b*n, h, w, c
                         summary_images = tf.concat(summary_images, axis=0)
+
                     summary_images_list.append(summary_images)
 
                 if hp.profile:
@@ -249,8 +252,8 @@ if __name__ == "__main__":
             total_loss['ae_loss'] = total_loss['ae_loss'] / num_batches
 
             ### Testing loop
-            for x in tqdm(test_dist_dataset):
-                distributed_test_step(x)
+            #for x in tqdm(test_dist_dataset):
+            #    distributed_test_step(x)
 
             # Checkpoint save.
             if epoch % hp.checkpoint_freq == 0:
