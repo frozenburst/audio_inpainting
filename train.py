@@ -15,19 +15,19 @@ print(tf.__version__)
 
 class hp:
     # Training setting
-    data_file = 'spec_15'
-    labeled = True
-    save_descript = '_net_wD_wCA_test'
+    data_file = 'spec_large'
+    labeled = False
+    save_descript = '_net_wD_wCA_woFlow_epoch500'
     training_file = op.join('./data', data_file, 'train_list.txt')
     testing_file = op.join('./data', data_file, 'test_list.txt')
-    logdir = op.join('./tf_logs', f'{data_file}{save_descript}')
+    logdir = op.join('./tf_logs_2', f'{data_file}{save_descript}')
     #checkpoint_dir = op.join('./checkpoints', data_file)
     checkpoint_prefix = op.join(logdir, "ckpt")
     checkpoint_restore_dir = ''
-    checkpoint_freq = 2
+    checkpoint_freq = 1
     restore_epochs = 0  # Specify for restore training.
     epochs = 50
-    steps_per_epoch = 10  # -1: whole training data.
+    steps_per_epoch = -1  # -1: whole training data.
     validation_split = 0.1
     batch = True
     batch_size = 32
@@ -101,6 +101,19 @@ if __name__ == "__main__":
             steps_per_epoch = int(hp.steps_per_epoch)
     else:
         raise ValueError(f"Wrong number assigned to steps_per_epoch: {hp.steps_per_epoch}")
+    # Skip the last batches for the batch size consistency, due to error might occur in CA module.
+    steps_per_epoch -= 1
+
+    # whole training data
+    if hp.steps_per_epoch == -1:
+            test_steps_per_epoch = math.ceil(test_data_fnames.shape[0] / GLOBAL_BATCH_SIZE)
+    elif hp.steps_per_epoch > 0:
+            test_steps_per_epoch = int(hp.steps_per_epoch)
+    else:
+        raise ValueError(f"Wrong number assigned to steps_per_epoch: {hp.steps_per_epoch}")
+    # Skip the last batches for the batch size consistency, due to error might occur in CA module.
+    test_steps_per_epoch -= 1
+
 
     with strategy.scope():
         print("Build model...")
@@ -149,7 +162,7 @@ if __name__ == "__main__":
                 # Generator
                 #x_stage1, x_stage2 = g_model(inputs=model_input, training=True)
                 #x_stage1, x_stage2, x_s_in, offset_flow = g_model(inputs=model_input, training=True)
-                x_stage1, x_stage2, x_s_in, offset_flow = g_model(inputs=model_input, training=True)
+                x_stage1, x_stage2, x_s_in = g_model(inputs=model_input, training=True)
 
                 x_predicted = x_stage2
                 x_complete = x_predicted * mask + x_incomplete * (1.-mask)
@@ -179,7 +192,7 @@ if __name__ == "__main__":
             loss['g_loss'] = g_loss_0
 
             #summary_images = [x_incomplete, x_stage1, x_stage2, x_pos, x_s_in, offset_flow]
-            summary_images = [x_incomplete, x_stage1, x_stage2, x_pos, x_s_in]
+            summary_images = [x_incomplete, x_stage1, x_stage2, x_complete, x_pos, x_s_in]
             summary_images = tf.concat(summary_images, axis=2)
 
             train_accuracy.update_state(x_pos, x_complete)
@@ -192,7 +205,7 @@ if __name__ == "__main__":
             x_incomplete = x_pos * (1.-mask)
             model_input = [x_incomplete, mask]
 
-            x_stage1, x_stage2 = g_model(model_input, training=False)
+            x_stage1, x_stage2, _ = g_model(model_input, training=False)
             x_complete = x_stage2 * mask + x_incomplete * (1.-mask)
             t_loss = loss_fn(x_pos, x_stage1)
             t_loss += loss_fn(x_pos, x_stage2)
@@ -252,9 +265,10 @@ if __name__ == "__main__":
             total_loss['d_loss'] = total_loss['d_loss'] / num_batches
             total_loss['ae_loss'] = total_loss['ae_loss'] / num_batches
 
+            test_iter = iter(test_dist_dataset)
             ### Testing loop
-            #for x in tqdm(test_dist_dataset):
-            #    distributed_test_step(x)
+            for batch_step in tqdm(range(test_steps_per_epoch)):
+                distributed_test_step(next(test_iter))
 
             # Checkpoint save.
             if epoch % hp.checkpoint_freq == 0:

@@ -108,6 +108,14 @@ def bbox2mask(hp, bbox, name='mask'):
     return mask
 
 
+def split(tensor):
+    new_list = []
+    for i in range(tensor.shape[0]):
+        t[i] = t[i][np.newaxis, :, :, :]
+        new_list.append(t[i])
+    return new_list
+
+
 def contextual_attention(f, b, mask=None, ksize=3, stride=1, rate=1,
                          fuse_k=3, softmax_scale=10., training=True, fuse=True, batch_size=32):
     """ Contextual attention layer implementation.
@@ -139,7 +147,6 @@ def contextual_attention(f, b, mask=None, ksize=3, stride=1, rate=1,
     raw_w = tf.image.extract_patches(
         b, [1,kernel,kernel,1], [1,rate*stride,rate*stride,1], [1,1,1,1], padding='SAME')
     #raw_w = tf.zeros([batch_size, 32, 32, 1536])
-
     # [16, 1024, 4, 4, 96]: 1024(total patches) * 4*4(each patch)
     # raw_w = tf.reshape(raw_w, [raw_int_bs[0], -1, kernel, kernel, raw_int_bs[3]])
     raw_w = tf.reshape(raw_w, [tf.shape(b)[0], -1, kernel, kernel, raw_int_bs[3]])
@@ -161,6 +168,7 @@ def contextual_attention(f, b, mask=None, ksize=3, stride=1, rate=1,
     int_fs = f.get_shape().as_list()
     # split f with each batch -> 16 * [1, 32, 32, 96] to group
     #f_groups = tf.split(f, int_fs[0], axis=0)
+    # fix to batch_size should skip last batch
     f_groups = tf.split(f, batch_size, axis=0)
     # from t(H*W*C) to w(b*k*k*c*h*w)
     bs = tf.shape(b)
@@ -170,7 +178,6 @@ def contextual_attention(f, b, mask=None, ksize=3, stride=1, rate=1,
     #    b, [1,ksize,ksize,1], [1,stride,stride,1], [1,1,1,1], padding='SAME')
     w = tf.image.extract_patches(
         b, [1,ksize,ksize,1], [1,stride,stride,1], [1,1,1,1], padding='SAME')
-
     # [16, 1024(h*w), 3, 3, 96]
     w = tf.reshape(w, [tf.shape(f)[0], -1, ksize, ksize, int_fs[3]])
     # [16, 3, 3, 96, 1024]
@@ -191,6 +198,8 @@ def contextual_attention(f, b, mask=None, ksize=3, stride=1, rate=1,
     # reduce mean count the mean of seleted axis,
     # equal return True or False by condition, cast convert True->1 False->0.
     mm = tf.cast(tf.math.equal(tf.math.reduce_mean(m, axis=[0,1,2], keepdims=True), 0.), tf.float32)
+    w_groups = tf.py_function(split, inp=[w], Tout=tf.float32)
+    raw_w_groups = tf.py_function(split, inp=[raw_w], Tout=tf.float32)
     # 16 * [1, 3, 3, 96, 1024]: after resize
     w_groups = tf.split(w, batch_size, axis=0)
     # 16 * [1, 4, 4, 96, 1024]: original size

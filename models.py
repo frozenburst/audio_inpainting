@@ -86,7 +86,7 @@ def inpaint_net(img_height=256, img_width=256, batch_size=32, training=True):
     x = layers.Conv2D(1, 3, (1,1), padding, activation="tanh", name='allconv17')(x)
     x_stage2 = x
 
-    offset_flow.set_shape([batch_size, 64, 64, 1])
+    #offset_flow.set_shape([batch_size, 64, 64, 1])
 
     #flow = layers.Lambda(tensor_wrapper)(offset_flow)
     #flow_m = layers.Lambda(tensor_wrapper)(offset_flow_m)
@@ -94,7 +94,7 @@ def inpaint_net(img_height=256, img_width=256, batch_size=32, training=True):
 
     #outputs = [x_stage1, x_stage2, x_stage2_input, flow]
     #outputs = [x_stage1, x_stage2, x_stage2_input, offset_flow, offset_flow_m]
-    outputs = [x_stage1, x_stage2, x_stage2_input, offset_flow]
+    outputs = [x_stage1, x_stage2, x_stage2_input]
     inpaint_net = keras.Model(inputs=[xin, mask], outputs=outputs, name='inpaint_net')
 
     # self train loop should comduct loss within loop. So no auto reduction here.
