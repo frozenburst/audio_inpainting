@@ -9,10 +9,12 @@ def gen_conv(x, cnum, ksize, stride=(1,1), padding='same',
              dilation_rate=(1,1), activation="elu", name='conv', training=True):
     """Define conv for generator."""
     x = layers.Conv2D(cnum, ksize, stride, padding, dilation_rate=dilation_rate, activation=None, name=name)(x)
+
     if cnum == 3 or activation is None:
         # conv for output
         return x
-    x, y = tf.split(x, 2, 3)
+
+    #x, y = tf.split(x, 2, 3)
 
     if activation == "elu":
         x = tf.keras.activations.elu(x)
@@ -20,10 +22,147 @@ def gen_conv(x, cnum, ksize, stride=(1,1), padding='same',
         x = tf.keras.activations.relu(x)
     else:
         raise ValueError("Unknown activations: {activation}")
-
-    y = tf.keras.activations.sigmoid(y)
-    x = x * y
     return x
+
+    #y = tf.keras.activations.sigmoid(y)
+    #x = x * y
+    #return x
+
+
+def kernel_spectral_norm(kernel, iteration=1, name='kernel_sn'):
+    # spectral_norm
+    def l2_norm(input_x, epsilon=1e-12):
+        input_x_norm = input_x / (tf.math.reduce_sum(input_x**2)**0.5 + epsilon)
+        return input_x_norm
+    w_shape = kernel.get_shape().as_list()
+    w_mat = tf.reshape(kernel, [-1, w_shape[-1]])
+    u = tf.compat.v1.get_variable(
+        'u', shape=[1, w_shape[-1]],
+        initializer=tf.compat.v1.truncated_normal_initializer(),
+        trainable=False)
+
+    def power_iteration(u, ite):
+        v_ = tf.linalg.matmul(u, tf.transpose(w_mat))
+        v_hat = l2_norm(v_)
+        u_ = tf.linalg.matmul(v_hat, w_mat)
+        u_hat = l2_norm(u_)
+        return u_hat, v_hat, ite+1
+
+    u_hat, v_hat,_ = power_iteration(u, iteration)
+    sigma = tf.matmul(tf.linalg.matmul(v_hat, w_mat), tf.transpose(u_hat))
+    w_mat = w_mat / sigma
+    with tf.control_dependencies([u.assign(u_hat)]):
+        w_norm = tf.reshape(w_mat, w_shape)
+    return w_norm
+
+
+class Conv2DSepctralNorm(tf.keras.layers.Conv2D):
+    def build(self, input_shape):
+        super(Conv2DSepctralNorm, self).build(input_shape)
+        self.kernel = kernel_spectral_norm(self.kernel)
+
+
+def conv2d_spectral_norm(
+        inputs,
+        filters,
+        kernel_size,
+        strides=(1, 1),
+        padding='valid',
+        data_format='channels_last',
+        dilation_rate=(1, 1),
+        activation=None,
+        use_bias=True,
+        kernel_initializer=None,
+        bias_initializer='zeros',
+        kernel_regularizer=None,
+        bias_regularizer=None,
+        activity_regularizer=None,
+        kernel_constraint=None,
+        bias_constraint=None,
+        trainable=True,
+        name=None):
+    layer = Conv2DSepctralNorm(
+        filters=filters,
+        kernel_size=kernel_size,
+        strides=strides,
+        padding=padding,
+        data_format=data_format,
+        dilation_rate=dilation_rate,
+        activation=activation,
+        use_bias=use_bias,
+        kernel_initializer=kernel_initializer,
+        bias_initializer=bias_initializer,
+        kernel_regularizer=kernel_regularizer,
+        bias_regularizer=bias_regularizer,
+        activity_regularizer=activity_regularizer,
+        kernel_constraint=kernel_constraint,
+        bias_constraint=bias_constraint,
+        trainable=trainable,
+        name=name,
+        dtype=inputs.dtype.base_dtype)
+    return layer.apply(inputs)
+
+
+# Reference from https://github.com/thisisiron/spectral_normalization-tf2/blob/master/sn.py
+class SpectralNormalization(tf.keras.layers.Wrapper):
+    def __init__(self, layer, iteration=1, eps=1e-12, training=True, **kwargs):
+        self.iteration = iteration
+        self.eps = eps
+        self.do_power_iteration = training
+        if not isinstance(layer, tf.keras.layers.Layer):
+            raise ValueError(
+                'Please initialize `TimeDistributed` layer with a '
+                '`Layer` instance. You passed: {input}'.format(input=layer))
+        super(SpectralNormalization, self).__init__(layer, **kwargs)
+
+    def build(self, input_shape):
+        self.layer.build(input_shape)
+
+        self.w = self.layer.kernel
+        self.w_shape = self.w.shape.as_list()
+
+        self.v = self.add_weight(shape=(1, self.w_shape[0] * self.w_shape[1] * self.w_shape[2]),
+                                 initializer=tf.initializers.TruncatedNormal(stddev=0.02),
+                                 trainable=False,
+                                 name='sn_v',
+                                 dtype=tf.float32)
+
+        self.u = self.add_weight(shape=(1, self.w_shape[-1]),
+                                 initializer=tf.initializers.TruncatedNormal(stddev=0.02),
+                                 trainable=False,
+                                 name='sn_u',
+                                 dtype=tf.float32)
+
+        super(SpectralNormalization, self).build()
+
+    def call(self, inputs):
+        self.update_weights()
+        output = self.layer(inputs)
+        self.restore_weights()  # Restore weights because of this formula "W = W - alpha * W_SN`"
+        return output
+
+    def update_weights(self):
+        w_reshaped = tf.reshape(self.w, [-1, self.w_shape[-1]])
+
+        u_hat = self.u
+        v_hat = self.v  # init v vector
+
+        if self.do_power_iteration:
+            for _ in range(self.iteration):
+                v_ = tf.matmul(u_hat, tf.transpose(w_reshaped))
+                v_hat = v_ / (tf.reduce_sum(v_**2)**0.5 + self.eps)
+
+                u_ = tf.matmul(v_hat, w_reshaped)
+                u_hat = u_ / (tf.reduce_sum(u_**2)**0.5 + self.eps)
+
+        sigma = tf.matmul(tf.matmul(v_hat, w_reshaped), tf.transpose(u_hat))
+        self.u.assign(u_hat)
+        self.v.assign(v_hat)
+
+        self.layer.kernel.assign(self.w / sigma)
+
+    def restore_weights(self):
+        self.layer.kernel.assign(self.w)
 
 
 def dis_conv(x, cnum, ksize=(5,5), strides=(2,2), padding='same', name='conv', training=True):
@@ -39,8 +178,12 @@ def dis_conv(x, cnum, ksize=(5,5), strides=(2,2), padding='same', name='conv', t
     Returns:
         tf.Tensor: output
     """
-    x = tfa.layers.SpectralNormalization(
+    x = SpectralNormalization(
             layers.Conv2D(cnum, ksize, strides, padding, activation=None, name=name))(x)
+    #x = tfa.layers.SpectralNormalization(
+    #        layers.Conv2D(cnum, ksize, strides, padding, activation=None, name=name))(x)
+    #x = layers.Conv2D(cnum, ksize, strides, padding, activation=None, name=name)(x)
+    #x = conv2d_spectral_norm(x, cnum, ksize, strides, padding, name=name)
 
     x = layers.LeakyReLU()(x)
     return x
@@ -275,11 +418,11 @@ def contextual_attention(f, b, mask=None, ksize=3, stride=1, rate=1,
         #flow_2 = tf.zeros([batch_size, 32, 32, 1])
         flow_shape = flow.get_shape().as_list()
         flow = layers.experimental.preprocessing.Resizing(
-                int(flow_shape[1]*rate), int(flow_shape[2]*rate), 'nearest')(flow)
+                int(flow_shape[1]*rate), int(flow_shape[2]*rate), 'bilinear')(flow)
 
         #flow_2_shape = flow_2.get_shape().as_list()
         #flow_2 = layers.experimental.preprocessing.Resizing(
-        #            int(flow_2_shape[1]*rate), int(flow_2_shape[2]*rate), 'nearest')(flow_2)
+        #            int(flow_2_shape[1]*rate), int(flow_2_shape[2]*rate), 'bilinear')(flow_2)
     return y, flow, flow_2
 
 

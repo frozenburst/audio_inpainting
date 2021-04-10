@@ -15,18 +15,19 @@ print(tf.__version__)
 
 class hp:
     # Training setting
-    data_file = 'spec_large'
-    labeled = False
-    save_descript = '_net_wD_wCA_woFlow_epoch500'
+    data_file = 'spec_15'
+    labeled = True  # 15:True, large:False
+    save_descript = '_net_wD_woCA_woFlow_woM_thSN_s2xin'
+    debug_graph = False
     training_file = op.join('./data', data_file, 'train_list.txt')
     testing_file = op.join('./data', data_file, 'test_list.txt')
-    logdir = op.join('./tf_logs_2', f'{data_file}{save_descript}')
+    logdir = op.join('./logs_debug', f'{data_file}{save_descript}')
     #checkpoint_dir = op.join('./checkpoints', data_file)
     checkpoint_prefix = op.join(logdir, "ckpt")
     checkpoint_restore_dir = ''
-    checkpoint_freq = 1
+    checkpoint_freq = 10
     restore_epochs = 0  # Specify for restore training.
-    epochs = 50
+    epochs = 100
     steps_per_epoch = -1  # -1: whole training data.
     validation_split = 0.1
     batch = True
@@ -41,9 +42,9 @@ class hp:
     mask_height = 256
     mask_width = 96
     max_delta_height = 0
-    max_delta_width = 64
+    max_delta_width = 32
     vertical_margin = 0
-    horizontal_margin = 0
+    horizontal_margin = 97  # match with deepfill
     #num_classes = 50
 
 
@@ -139,9 +140,17 @@ if __name__ == "__main__":
         train_accuracy = tf.keras.metrics.MeanAbsoluteError(name='train_MAE_loss')
         test_accuracy = tf.keras.metrics.MeanAbsoluteError(name='test_MAE_loss')
 
-        def compute_loss(ref, predictions):
-            per_example_loss = loss_fn(ref, predictions)
-            return tf.nn.compute_average_loss(per_example_loss, global_batch_size=GLOBAL_BATCH_SIZE)
+
+        # The function here only consider the first dimension(B) of losses,
+        # wont mean over dims: H, W, C, due to reduce_sup in methods.
+        # Calculate the distributed losses by myself.
+        def compute_global_loss(loss):
+            batch_div = hp.batch_size / GLOBAL_BATCH_SIZE
+            L = loss * batch_div
+            return L
+            #per_example_loss = tf.math.abs(ref - predictions)
+            # sample_weight in method works like attention mapt
+            # return tf.nn.compute_average_loss(per_example_loss, global_batch_size=GLOBAL_BATCH_SIZE)
 
         def create_mask():
             bbox = random_bbox(hp)
@@ -149,14 +158,17 @@ if __name__ == "__main__":
             mask = tf.cast(regular_mask, tf.float32)
             return mask
 
-        def train_step(inputs):
+        @tf.function
+        def train_step(inputs, debug=False):
             x_pos = inputs
             loss = {}
 
-            mask = create_mask()
-            x_incomplete = x_pos * (1.-mask)
+            #mask = create_mask()
+            #x_incomplete = x_pos * (1.-mask)
 
-            model_input = [x_incomplete, mask]
+            #model_input = [x_incomplete, mask]
+
+            model_input = x_pos
 
             with tf.GradientTape() as g_tape, tf.GradientTape() as d_tape:
                 # Generator
@@ -165,21 +177,30 @@ if __name__ == "__main__":
                 x_stage1, x_stage2, x_s_in = g_model(inputs=model_input, training=True)
 
                 x_predicted = x_stage2
-                x_complete = x_predicted * mask + x_incomplete * (1.-mask)
+                #x_complete = x_predicted * mask + x_incomplete * (1.-mask)
+                x_complete = x_stage2
 
-                ae_loss = compute_loss(x_pos, x_stage1)
-                ae_loss += compute_loss(x_pos, x_stage2)
+                # l1 loss
+                s1_loss = compute_global_loss(tf.math.reduce_mean(tf.math.abs(x_pos - x_stage1)))
+                s2_loss = compute_global_loss(tf.math.reduce_mean(tf.math.abs(x_pos - x_stage2)))
+                ae_loss = s1_loss + s2_loss
 
                 # Discriminator
                 x_pos_neg = tf.concat([x_pos, x_complete], axis=0)
-                x_pos_neg_shape = x_pos_neg.get_shape().as_list()
-                x_pos_neg = tf.concat([x_pos_neg,
-                                       tf.tile(mask, [x_pos_neg_shape[0], 1, 1, 1])], axis=3)
+                #x_pos_neg_shape = x_pos_neg.get_shape().as_list()
+                #x_pos_neg = tf.concat([x_pos_neg,
+                #                       tf.tile(mask, [x_pos_neg_shape[0], 1, 1, 1])], axis=3)
                 pos_neg = d_model(inputs=x_pos_neg, training=True)
 
                 pos, neg = tf.split(pos_neg, 2)
                 g_loss_0, d_loss = gan_hinge_loss(pos, neg)
+                g_loss_0 = compute_global_loss(g_loss_0)
+                d_loss = compute_global_loss(d_loss)
+
                 g_loss = hp.l1_loss_alpha * ae_loss + hp.gan_loss_alpha * g_loss_0
+
+            if debug:
+                return None
 
             g_gradients = g_tape.gradient(g_loss, g_model.trainable_variables)
             d_gradients = d_tape.gradient(d_loss, d_model.trainable_variables)
@@ -187,12 +208,15 @@ if __name__ == "__main__":
             g_optimizer.apply_gradients(zip(g_gradients, g_model.trainable_variables))
             d_optimizer.apply_gradients(zip(d_gradients, d_model.trainable_variables))
 
+            loss['s1_loss'] = s1_loss
+            loss['s2_loss'] = s2_loss
             loss['ae_loss'] = ae_loss
             loss['d_loss'] = d_loss
             loss['g_loss'] = g_loss_0
 
             #summary_images = [x_incomplete, x_stage1, x_stage2, x_pos, x_s_in, offset_flow]
-            summary_images = [x_incomplete, x_stage1, x_stage2, x_complete, x_pos, x_s_in]
+            #summary_images = [x_incomplete, x_stage1, x_stage2, x_complete, x_pos, x_s_in]
+            summary_images = [x_stage1, x_stage2, x_pos, x_s_in]
             summary_images = tf.concat(summary_images, axis=2)
 
             train_accuracy.update_state(x_pos, x_complete)
@@ -216,18 +240,29 @@ if __name__ == "__main__":
         @tf.function
         def distributed_train_step(dataset_inputs):
             per_replica_losses, summary_images = strategy.run(train_step, args=(dataset_inputs,))
-            per_replica_losses['g_loss'] = strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_losses['g_loss'], axis=None)
-            per_replica_losses['d_loss'] = strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_losses['d_loss'], axis=None)
-            per_replica_losses['ae_loss'] = strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_losses['ae_loss'], axis=None)
+            for key in per_replica_losses:
+                per_replica_losses[key] = strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_losses[key], axis=None)
             return per_replica_losses, summary_images
 
         @tf.function
         def distributed_test_step(dataset_inputs):
             return strategy.run(test_step, args=(dataset_inputs,))
 
+
+        if hp.debug_graph:
+            inputs = tf.zeros([hp.batch_size, 256, 256, 1])
+            tf.summary.trace_on(graph=True, profiler=False)
+            _ = train_step(inputs, hp.debug_graph)
+            with file_summary_writer.as_default():
+                tf.summary.trace_export(
+                    name="train_step_trace",
+                    step=0,
+                    profiler_outdir=hp.logdir
+                )
+
         # Experiment Epoch
         for epoch in range(hp.restore_epochs, hp.epochs+hp.restore_epochs):
-            total_loss = {'g_loss': 0.0, 'd_loss': 0.0, 'ae_loss': 0.0}
+            total_loss = {}
             #total_loss = 0.0
             num_batches = 0
             summary_images_list = []
@@ -237,9 +272,11 @@ if __name__ == "__main__":
             for batch_step in tqdm(range(steps_per_epoch)):
                 # The step here refers to whole batch
                 step_loss, summary_images = distributed_train_step(next(train_iter))
-                total_loss['g_loss'] += step_loss['g_loss']
-                total_loss['d_loss'] += step_loss['d_loss']
-                total_loss['ae_loss'] += step_loss['ae_loss']
+                for key in step_loss:
+                    if key in total_loss:
+                        total_loss[key] += step_loss[key]
+                    else:
+                        total_loss[key] = step_loss[key]
                 # total_loss += step_loss
                 num_batches += 1
 
@@ -255,20 +292,19 @@ if __name__ == "__main__":
                 if hp.profile:
                     if epoch == 0 and batch_step == 9:
                         tf.profiler.experimental.start(hp.logdir)
-                    if epoch == 0 and batch_step == 19:
+                    if epoch == 0 and batch_step == 14:
                         tf.profiler.experimental.stop()
 
             # concat all sample on batch channel
             summary_images_list = tf.concat(summary_images_list, axis=0)
             # total_loss = total_loss / num_batches
-            total_loss['g_loss'] = total_loss['g_loss'] / num_batches
-            total_loss['d_loss'] = total_loss['d_loss'] / num_batches
-            total_loss['ae_loss'] = total_loss['ae_loss'] / num_batches
+            for key in total_loss:
+                total_loss[key] = total_loss[key] / num_batches
 
-            test_iter = iter(test_dist_dataset)
             ### Testing loop
-            for batch_step in tqdm(range(test_steps_per_epoch)):
-                distributed_test_step(next(test_iter))
+            #test_iter = iter(test_dist_dataset)
+            #for batch_step in tqdm(range(test_steps_per_epoch)):
+            #    distributed_test_step(next(test_iter))
 
             # Checkpoint save.
             if epoch % hp.checkpoint_freq == 0:
