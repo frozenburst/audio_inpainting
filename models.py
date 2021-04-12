@@ -11,17 +11,17 @@ from inpaint_ops import contextual_attention
 def inpaint_net(img_height=256, img_width=256, batch_size=32, training=True):
 
     xin = keras.Input(shape=(img_height, img_width, 1), name="image")
-    #mask = keras.Input(shape=(img_height, img_width, 1), name="mask")
+    mask = keras.Input(shape=(img_height, img_width, 1), name="mask")
     offset_flow = None
 
-    #ones_x = tf.ones_like(xin)
+    ones_x = tf.ones_like(xin)
     #x = tf.concat([xin, ones_x*mask], axis=3)
     # In original codes is: for the reason of indicating image bound?
-    #x = tf.concat([xin, ones_x, ones_x*mask], axis=3)
+    x = tf.concat([xin, ones_x, ones_x*mask], axis=3)
 
     cnum = 48
     padding = 'same'
-    x = gen_conv(xin, cnum, 5, (1,1), padding, activation="elu", name='conv1')
+    x = gen_conv(x, cnum, 5, (1,1), padding, activation="elu", name='conv1')
     x = gen_conv(x, cnum*2, 3, (2,2), padding, activation="elu", name='conv2_ds')
     x = gen_conv(x, cnum*2, 3, (1,1), padding, activation="elu", name='conv3')
     x = gen_conv(x, cnum*4, 3, (2,2), padding, activation="elu", name='conv4_ds')
@@ -46,9 +46,9 @@ def inpaint_net(img_height=256, img_width=256, batch_size=32, training=True):
 
     # autoencoder = keras.Model(inputs, decoder_output, name="autoencoder")
 
-    #x = x*mask + xin*(1.-mask)
-    #x.set_shape(xin.get_shape().as_list())
-    x_stage2_input = xin
+    x = x*mask + xin*(1.-mask)
+    x.set_shape(xin.get_shape().as_list())
+    x_stage2_input = x
     x = gen_conv(x_stage2_input, cnum, 5, (1,1), padding, activation="elu", name='xconv1')
     x = gen_conv(x, cnum, 3, (2,2), padding, activation="elu", name='xconv2_ds')
     x = gen_conv(x, cnum*2, 3, (1,1), padding, activation="elu", name='xconv3')
@@ -98,8 +98,8 @@ def inpaint_net(img_height=256, img_width=256, batch_size=32, training=True):
     #outputs = [x_stage1, x_stage2, x_stage2_input, offset_flow, offset_flow_m]
     outputs = [x_stage1, x_stage2, x_stage2_input]
 
-    #inpaint_net = keras.Model(inputs=[xin, mask], outputs=outputs, name='inpaint_net')
-    inpaint_net = keras.Model(inputs=xin, outputs=outputs, name='inpaint_net')
+    inpaint_net = keras.Model(inputs=[xin, mask], outputs=outputs, name='inpaint_net')
+    #inpaint_net = keras.Model(inputs=xin, outputs=outputs, name='inpaint_net')
 
     # self train loop should comduct loss within loop. So no auto reduction here.
     #loss_fn = tf.keras.losses.MeanAbsoluteError(reduction='sum_over_batch_size')
@@ -117,8 +117,8 @@ def inpaint_net(img_height=256, img_width=256, batch_size=32, training=True):
 
 
 def sn_patch_gan_discriminator(img_height=256, img_width=256, training=True):
-    #xin = keras.Input(shape=(img_height, img_width, 2), name='img')
-    xin = keras.Input(shape=(img_height, img_width, 1), name='img')
+    xin = keras.Input(shape=(img_height, img_width, 2), name='img')
+    #xin = keras.Input(shape=(img_height, img_width, 1), name='img')
 
     cnum = 64
     x = dis_conv(xin, cnum, name='disconv1', training=training)

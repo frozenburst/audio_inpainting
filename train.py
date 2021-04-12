@@ -2,6 +2,7 @@ from data_loader import load_npy, load_data_filename
 from models import inpaint_net, sn_patch_gan_discriminator
 from summary_ops import scalar_summary, images_summary
 from summary_ops import dict_scalar_summary
+from summary_ops import gradient_calc
 from inpaint_ops import random_bbox, bbox2mask, gan_hinge_loss
 from tqdm import tqdm
 
@@ -17,7 +18,7 @@ class hp:
     # Training setting
     data_file = 'spec_15'
     labeled = True  # 15:True, large:False
-    save_descript = '_net_wD_woCA_woFlow_woM_thSN_s2xin'
+    save_descript = '_net_wDmySNrefbigG_woCA_woFlow_testD'
     debug_graph = False
     training_file = op.join('./data', data_file, 'train_list.txt')
     testing_file = op.join('./data', data_file, 'test_list.txt')
@@ -27,7 +28,7 @@ class hp:
     checkpoint_restore_dir = ''
     checkpoint_freq = 10
     restore_epochs = 0  # Specify for restore training.
-    epochs = 100
+    epochs = 200
     steps_per_epoch = -1  # -1: whole training data.
     validation_split = 0.1
     batch = True
@@ -39,12 +40,13 @@ class hp:
     # Data
     image_height = 256
     image_width = 256
+    image_channel = 1
     mask_height = 256
-    mask_width = 96
+    mask_width = 64
     max_delta_height = 0
     max_delta_width = 32
     vertical_margin = 0
-    horizontal_margin = 97  # match with deepfill
+    horizontal_margin = 65  # match with deepfill
     #num_classes = 50
 
 
@@ -159,26 +161,28 @@ if __name__ == "__main__":
             return mask
 
         @tf.function
-        def train_step(inputs, debug=False):
-            x_pos = inputs
+        def train_step(inputs):
+            #x_pos = inputs
+            x_pos, mask = inputs
             loss = {}
 
             #mask = create_mask()
-            #x_incomplete = x_pos * (1.-mask)
+            x_incomplete = x_pos * (1.-mask)
 
-            #model_input = [x_incomplete, mask]
+            model_input = [x_incomplete, mask]
 
-            model_input = x_pos
+            #model_input = x_pos
 
-            with tf.GradientTape() as g_tape, tf.GradientTape() as d_tape:
+            #with tf.GradientTape() as g_tape, tf.GradientTape() as d_tape:
+            with tf.GradientTape(persistent=True) as tape:
                 # Generator
                 #x_stage1, x_stage2 = g_model(inputs=model_input, training=True)
                 #x_stage1, x_stage2, x_s_in, offset_flow = g_model(inputs=model_input, training=True)
                 x_stage1, x_stage2, x_s_in = g_model(inputs=model_input, training=True)
 
                 x_predicted = x_stage2
-                #x_complete = x_predicted * mask + x_incomplete * (1.-mask)
-                x_complete = x_stage2
+                x_complete = x_predicted * mask + x_incomplete * (1.-mask)
+                #x_complete = x_stage2
 
                 # l1 loss
                 s1_loss = compute_global_loss(tf.math.reduce_mean(tf.math.abs(x_pos - x_stage1)))
@@ -186,24 +190,24 @@ if __name__ == "__main__":
                 ae_loss = s1_loss + s2_loss
 
                 # Discriminator
+
                 x_pos_neg = tf.concat([x_pos, x_complete], axis=0)
-                #x_pos_neg_shape = x_pos_neg.get_shape().as_list()
-                #x_pos_neg = tf.concat([x_pos_neg,
-                #                       tf.tile(mask, [x_pos_neg_shape[0], 1, 1, 1])], axis=3)
+                x_pos_neg_shape = x_pos_neg.get_shape().as_list()
+                x_pos_neg = tf.concat([x_pos_neg,
+                                       tf.tile(mask, [x_pos_neg_shape[0], 1, 1, 1])], axis=3)
                 pos_neg = d_model(inputs=x_pos_neg, training=True)
 
                 pos, neg = tf.split(pos_neg, 2)
-                g_loss_0, d_loss = gan_hinge_loss(pos, neg)
+                g_loss_0, d_loss, hp_loss, hn_loss = gan_hinge_loss(pos, neg)
+                hp_loss = compute_global_loss(hp_loss)
+                hn_loss = compute_global_loss(hn_loss)
                 g_loss_0 = compute_global_loss(g_loss_0)
                 d_loss = compute_global_loss(d_loss)
 
                 g_loss = hp.l1_loss_alpha * ae_loss + hp.gan_loss_alpha * g_loss_0
 
-            if debug:
-                return None
-
-            g_gradients = g_tape.gradient(g_loss, g_model.trainable_variables)
-            d_gradients = d_tape.gradient(d_loss, d_model.trainable_variables)
+            g_gradients = tape.gradient(g_loss, g_model.trainable_variables)
+            d_gradients = tape.gradient(d_loss, d_model.trainable_variables)
 
             g_optimizer.apply_gradients(zip(g_gradients, g_model.trainable_variables))
             d_optimizer.apply_gradients(zip(d_gradients, d_model.trainable_variables))
@@ -213,13 +217,20 @@ if __name__ == "__main__":
             loss['ae_loss'] = ae_loss
             loss['d_loss'] = d_loss
             loss['g_loss'] = g_loss_0
+            loss['hinge_pos_loss'] = hp_loss
+            loss['hinge_neg_loss'] = hn_loss
+            loss['g_to_x2'] = gradient_calc(g_loss_0, x_stage2)
+            loss['ae_to_x1'] = gradient_calc(ae_loss, x_stage1)
+            loss['ae_to_x2'] = gradient_calc(ae_loss, x_stage2)
 
             #summary_images = [x_incomplete, x_stage1, x_stage2, x_pos, x_s_in, offset_flow]
-            #summary_images = [x_incomplete, x_stage1, x_stage2, x_complete, x_pos, x_s_in]
-            summary_images = [x_stage1, x_stage2, x_pos, x_s_in]
+            summary_images = [x_incomplete, x_stage1, x_stage2, x_complete, x_pos, x_s_in]
+            #summary_images = [x_incomplete, x_stage1, x_stage2, x_pos, x_s_in]
+            #summary_images = [x_stage1, x_stage2, x_pos, x_s_in]
             summary_images = tf.concat(summary_images, axis=2)
 
             train_accuracy.update_state(x_pos, x_complete)
+
             return loss, summary_images
 
         def test_step(inputs):
@@ -271,15 +282,22 @@ if __name__ == "__main__":
             train_iter = iter(train_dist_dataset)
             for batch_step in tqdm(range(steps_per_epoch)):
                 # The step here refers to whole batch
-                step_loss, summary_images = distributed_train_step(next(train_iter))
+                step = epoch * steps_per_epoch + batch_step
+
+                mask = create_mask()
+                x_pos = next(train_iter)
+                step_loss, summary_images = distributed_train_step([x_pos, mask])
+                #step_loss, summary_images = distributed_train_step(next(train_iter))
+
                 for key in step_loss:
                     if key in total_loss:
                         total_loss[key] += step_loss[key]
                     else:
                         total_loss[key] = step_loss[key]
                 # total_loss += step_loss
-                num_batches += 1
 
+                num_batches += 1
+                '''
                 # Cast tensor from Replica
                 if batch_step == 0: # Only collect first batch due to OOM
                     if strategy.num_replicas_in_sync > 1:
@@ -288,6 +306,17 @@ if __name__ == "__main__":
                         summary_images = tf.concat(summary_images, axis=0)
 
                     summary_images_list.append(summary_images)
+                '''
+
+                if strategy.num_replicas_in_sync > 1:
+                    summary_images = summary_images.values
+                    summary_images = tf.concat(summary_images, axis=0)
+
+                step = epoch * steps_per_epoch + batch_step
+                with file_summary_writer.as_default():
+                    dict_scalar_summary('train loss step', step_loss, step=step)
+                    scalar_summary('train MAE loss', train_accuracy.result(), step=step)
+                    images_summary("Training result", summary_images, step=step, max_outputs=hp.max_outputs)
 
                 if hp.profile:
                     if epoch == 0 and batch_step == 9:
@@ -296,32 +325,33 @@ if __name__ == "__main__":
                         tf.profiler.experimental.stop()
 
             # concat all sample on batch channel
-            summary_images_list = tf.concat(summary_images_list, axis=0)
+            #summary_images_list = tf.concat(summary_images_list, axis=0)
             # total_loss = total_loss / num_batches
             for key in total_loss:
                 total_loss[key] = total_loss[key] / num_batches
 
             ### Testing loop
-            #test_iter = iter(test_dist_dataset)
-            #for batch_step in tqdm(range(test_steps_per_epoch)):
-            #    distributed_test_step(next(test_iter))
+            test_iter = iter(test_dist_dataset)
+            for batch_step in tqdm(range(test_steps_per_epoch)):
+                distributed_test_step(next(test_iter))
 
             # Checkpoint save.
             if epoch % hp.checkpoint_freq == 0:
                 checkpoint.save(hp.checkpoint_prefix)
 
+
             # Write to tensorboard.
             with file_summary_writer.as_default():
                 dict_scalar_summary('train loss', total_loss, step=epoch)
                 scalar_summary('train MAE loss', train_accuracy.result(), step=epoch)
-                images_summary("Training result", summary_images_list, step=epoch, max_outputs=hp.max_outputs)
+                #images_summary("Training result", summary_images_list, step=epoch, max_outputs=hp.max_outputs)
 
                 scalar_summary('test loss', test_loss.result(), step=epoch)
                 scalar_summary('test MAE loss', test_accuracy.result(), step=epoch)
 
             template = ("Epoch {}, Loss: {}, MAE loss: {}, Test Loss: {}, "
                         "Test MAE loss: {}")
-            print(template.format(epoch+1, total_loss['g_loss'],
+            print(template.format(epoch+1, total_loss['ae_loss'],
                                   train_accuracy.result()*100, test_loss.result(),
                                   test_accuracy.result()*100))
 
