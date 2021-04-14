@@ -6,6 +6,8 @@ from tensorflow.keras import layers
 from inpaint_ops import gen_conv, dis_conv
 from inpaint_ops import contextual_attention
 
+from sn_conv import SNConv2D
+
 
 # Reference from GitHub: https://github.com/JiahuiYu/generative_inpainting
 def inpaint_net(img_height=256, img_width=256, batch_size=32, training=True):
@@ -15,9 +17,9 @@ def inpaint_net(img_height=256, img_width=256, batch_size=32, training=True):
     offset_flow = None
 
     ones_x = tf.ones_like(xin)
-    #x = tf.concat([xin, ones_x*mask], axis=3)
+    x = tf.concat([xin, ones_x*mask], axis=3)
     # In original codes is: for the reason of indicating image bound?
-    x = tf.concat([xin, ones_x, ones_x*mask], axis=3)
+    #x = tf.concat([xin, ones_x, ones_x*mask], axis=3)
 
     cnum = 48
     padding = 'same'
@@ -27,8 +29,8 @@ def inpaint_net(img_height=256, img_width=256, batch_size=32, training=True):
     x = gen_conv(x, cnum*4, 3, (2,2), padding, activation="elu", name='conv4_ds')
     x = gen_conv(x, cnum*4, 3, (1,1), padding, activation="elu", name='conv5')
     x = gen_conv(x, cnum*4, 3, (1,1), padding, activation="elu", name='conv6')
-    #x_shape = x.get_shape().as_list()[1:3]
-    #mask_s = layers.experimental.preprocessing.Resizing(x_shape[0], x_shape[1], 'nearest')(mask)
+    x_shape = x.get_shape().as_list()[1:3]
+    mask_s = layers.experimental.preprocessing.Resizing(x_shape[0], x_shape[1], 'nearest')(mask)
     x = gen_conv(x, cnum*4, 3, (1,1), padding, dilation_rate=(2,2), activation="elu", name='conv7_astrous')
     x = gen_conv(x, cnum*4, 3, (1,1), padding, dilation_rate=(4,4), activation="elu", name='conv8_astrous')
     x = gen_conv(x, cnum*4, 3, (1,1), padding, dilation_rate=(8,8), activation="elu", name='conv9_astrous')
@@ -41,7 +43,8 @@ def inpaint_net(img_height=256, img_width=256, batch_size=32, training=True):
     x = layers.UpSampling2D(size=(2, 2), interpolation="nearest", name='up2')(x)
     x = gen_conv(x, cnum, 3, (1,1), padding, activation="elu", name='conv15')
     x = gen_conv(x, cnum//2, 3, (1,1), padding, activation="elu", name='conv16')
-    x = layers.Conv2D(1, 3, (1,1), padding, activation="tanh", name='conv17')(x)
+    #x = layers.Conv2D(1, 3, (1,1), padding, activation="tanh", name='conv17')(x)
+    x = SNConv2D(1, 3, (1,1), padding, activation="tanh", name='conv17')(x)
     x_stage1 = x
 
     # autoencoder = keras.Model(inputs, decoder_output, name="autoencoder")
@@ -67,7 +70,7 @@ def inpaint_net(img_height=256, img_width=256, batch_size=32, training=True):
     x = gen_conv(x, cnum*4, 3, (2,2), padding, activation="elu", name='pmconv4_ds')
     x = gen_conv(x, cnum*4, 3, (1,1), padding, activation="elu", name='pmconv5')
     x = gen_conv(x, cnum*4, 3, (1,1), padding, activation="relu", name='pmconv6')
-    #_, offset_flow, offset_flow_m = contextual_attention(f=x, b=x, mask=mask_s, ksize=3, stride=1, rate=2, batch_size=batch_size)
+    x, offset_flow, offset_flow_m = contextual_attention(f=x, b=x, mask=mask_s, ksize=3, stride=1, rate=2, batch_size=batch_size)
     # x = contextual_attention(f=x, b=x, mask=mask_s, ksize=3, stride=1, rate=2, batch_size=batch_size)
     x = gen_conv(x, cnum*4, 3, (1,1), padding, activation="elu", name='pmconv9')
     x = gen_conv(x, cnum*4, 3, (1,1), padding, activation="elu", name='pmconv10')
@@ -82,7 +85,8 @@ def inpaint_net(img_height=256, img_width=256, batch_size=32, training=True):
     x = layers.UpSampling2D(size=(2, 2), interpolation="nearest", name='allup2')(x)
     x = gen_conv(x, cnum, 3, (1,1), padding, activation="elu", name='allconv15')
     x = gen_conv(x, cnum//2, 3, (1,1), padding, activation="elu", name='allconv16')
-    x = layers.Conv2D(1, 3, (1,1), padding, activation="tanh", name='allconv17')(x)
+    #x = layers.Conv2D(1, 3, (1,1), padding, activation="tanh", name='allconv17')(x)
+    x = SNConv2D(1, 3, (1,1), padding, activation="tanh", name='allconv17')(x)
     x_stage2 = x
 
     #breakpoint()

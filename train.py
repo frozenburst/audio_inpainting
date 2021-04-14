@@ -16,19 +16,19 @@ print(tf.__version__)
 
 class hp:
     # Training setting
-    data_file = 'spec_15'
-    labeled = True  # 15:True, large:False
-    save_descript = '_net_wDmySNrefbigG_woCA_woFlow_testD'
+    data_file = 'spec_large'
+    labeled = False  # 15:True, large:False
+    save_descript = '_net_wDmySN_wCA_woFlow_SAGPU8'
     debug_graph = False
     training_file = op.join('./data', data_file, 'train_list.txt')
     testing_file = op.join('./data', data_file, 'test_list.txt')
-    logdir = op.join('./logs_debug', f'{data_file}{save_descript}')
+    logdir = op.join('./logs', f'{data_file}{save_descript}')
     #checkpoint_dir = op.join('./checkpoints', data_file)
     checkpoint_prefix = op.join(logdir, "ckpt")
     checkpoint_restore_dir = ''
-    checkpoint_freq = 10
+    checkpoint_freq = 1
     restore_epochs = 0  # Specify for restore training.
-    epochs = 200
+    epochs = 100
     steps_per_epoch = -1  # -1: whole training data.
     validation_split = 0.1
     batch = True
@@ -42,11 +42,11 @@ class hp:
     image_width = 256
     image_channel = 1
     mask_height = 256
-    mask_width = 64
+    mask_width = 96
     max_delta_height = 0
     max_delta_width = 32
     vertical_margin = 0
-    horizontal_margin = 65  # match with deepfill
+    horizontal_margin = 0  # match with deepfill
     #num_classes = 50
 
 
@@ -74,9 +74,11 @@ if __name__ == "__main__":
     # Map function should update to TFRecord
     # instead of tf.py_function for better performance.
     train_dataset = tf.data.Dataset.from_tensor_slices((train_data_fnames))
+    train_dataset = train_dataset.shuffle(buffer_size=len(train_data_fnames))
     train_dataset = train_dataset.map(lambda x: tf.py_function(load_npy, inp=[x], Tout=tf.float32),
                                       num_parallel_calls=tf.data.AUTOTUNE)
-    train_dataset = train_dataset.shuffle(buffer_size=1000).batch(GLOBAL_BATCH_SIZE)
+    train_dataset = train_dataset.batch(GLOBAL_BATCH_SIZE)
+    #train_dataset = train_dataset.shuffle(buffer_size=len(train_data_fnames)).batch(GLOBAL_BATCH_SIZE)
     train_dataset = train_dataset.prefetch(tf.data.experimental.AUTOTUNE)
     train_dataset = train_dataset.with_options(options)
 
@@ -125,7 +127,7 @@ if __name__ == "__main__":
         loss_fn = tf.keras.losses.MeanAbsoluteError(reduction=tf.keras.losses.Reduction.NONE)
         print(g_model.summary())
         d_model = sn_patch_gan_discriminator(hp.image_height, hp.image_width)
-        d_optimizer = tf.keras.optimizers.Adam(1e-4, beta_1=0.5, beta_2=0.999)
+        d_optimizer = tf.keras.optimizers.Adam(2e-4, beta_1=0.5, beta_2=0.999)
         print(d_model.summary())
 
         checkpoint = tf.train.Checkpoint(
@@ -190,7 +192,6 @@ if __name__ == "__main__":
                 ae_loss = s1_loss + s2_loss
 
                 # Discriminator
-
                 x_pos_neg = tf.concat([x_pos, x_complete], axis=0)
                 x_pos_neg_shape = x_pos_neg.get_shape().as_list()
                 x_pos_neg = tf.concat([x_pos_neg,
@@ -205,6 +206,7 @@ if __name__ == "__main__":
                 d_loss = compute_global_loss(d_loss)
 
                 g_loss = hp.l1_loss_alpha * ae_loss + hp.gan_loss_alpha * g_loss_0
+                #g_loss = hp.gan_loss_alpha * g_loss_0
 
             g_gradients = tape.gradient(g_loss, g_model.trainable_variables)
             d_gradients = tape.gradient(d_loss, d_model.trainable_variables)

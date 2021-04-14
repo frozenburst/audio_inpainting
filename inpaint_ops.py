@@ -11,6 +11,7 @@ from tensorflow.python.keras import regularizers
 from tensorflow.python.keras import activations
 from tensorflow.python.ops import init_ops
 from sn_conv import SNConv2D
+from sn_conv import conv2d_spectral_norm
 
 from summary_ops import scalar_summary
 
@@ -18,11 +19,12 @@ from summary_ops import scalar_summary
 def gen_conv(x, cnum, ksize, stride=(1,1), padding='same',
              dilation_rate=(1,1), activation="elu", name='conv', training=True):
     """Define conv for generator."""
-    x = layers.Conv2D(cnum, ksize, stride, padding, dilation_rate=dilation_rate, activation=None, name=name)(x)
+    #x = layers.Conv2D(cnum, ksize, stride, padding, dilation_rate=dilation_rate, activation=None, name=name)(x)
+    x = SNConv2D(cnum, ksize, stride, padding, dilation_rate=dilation_rate, activation=None, name=name)(x)
 
-    if cnum == 3 or activation is None:
-        # conv for output
-        return x
+    #if cnum == 3 or activation is None:
+    #    # conv for output
+    #    return x
 
     x, y = tf.split(x, 2, 3)
 
@@ -37,190 +39,6 @@ def gen_conv(x, cnum, ksize, stride=(1,1), padding='same',
     y = tf.keras.activations.sigmoid(y)
     x = x * y
     return x
-
-
-def kernel_spectral_norm(kernel, iteration=1, name='kernel_sn'):
-    # spectral_norm
-    def l2_norm(input_x, epsilon=1e-12):
-        input_x_norm = input_x / (tf.math.reduce_sum(input_x**2)**0.5 + epsilon)
-        return input_x_norm
-    w_shape = kernel.get_shape().as_list()
-    w_mat = tf.reshape(kernel, [-1, w_shape[-1]])
-
-    u = tf.compat.v1.get_variable(
-        'u', shape=[1, w_shape[-1]],
-        initializer=tf.compat.v1.truncated_normal_initializer(),
-        trainable=False)
-
-
-    def power_iteration(u, ite):
-        v_ = tf.linalg.matmul(u, tf.transpose(w_mat))
-        v_hat = l2_norm(v_)
-        u_ = tf.linalg.matmul(v_hat, w_mat)
-        u_hat = l2_norm(u_)
-        return u_hat, v_hat, ite+1
-
-    u_hat, v_hat,_ = power_iteration(u, iteration)
-
-    sigma = tf.matmul(tf.matmul(v_hat, w_mat), tf.transpose(u_hat))
-    w_mat = w_mat / sigma
-    with tf.control_dependencies([u.assign(u_hat)]):
-        w_norm = tf.reshape(w_mat, w_shape)
-    return w_norm
-
-
-class Conv2DSepctralNorm(Conv):
-    def __init__(self, filters,
-                 kernel_size,
-                 strides=(1, 1),
-                 padding='same',
-                 data_format='channels_last',
-                 dilation_rate=(1, 1),
-                 groups=1,
-                 activation=None,
-                 use_bias=True,
-                 kernel_initializer=None,
-                 bias_initializer='zeros',
-                 kernel_regularizer=None,
-                 bias_regularizer=None,
-                 activity_regularizer=None,
-                 kernel_constraint=None,
-                 bias_constraint=None,
-                 **kwargs):
-        super(Conv2DSepctralNorm, self).__init__(
-            rank=2,
-            filters=filters,
-            kernel_size=kernel_size,
-            strides=strides,
-            padding=padding,
-            data_format=data_format,
-            dilation_rate=dilation_rate,
-            groups=groups,
-            activation=activations.get(activation),
-            use_bias=use_bias,
-            kernel_initializer=initializers.get(kernel_initializer),
-            bias_initializer=initializers.get(bias_initializer),
-            kernel_regularizer=regularizers.get(kernel_regularizer),
-            bias_regularizer=regularizers.get(bias_regularizer),
-            activity_regularizer=regularizers.get(activity_regularizer),
-            kernel_constraint=constraints.get(kernel_constraint),
-            bias_constraint=constraints.get(bias_constraint),
-            **kwargs)
-
-    def build(self, input_shape):
-        if self.built is False:
-            super(Conv2DSepctralNorm, self).build(input_shape)
-        self.kernel = kernel_spectral_norm(self.kernel)
-
-
-def conv2d_spectral_norm(
-        inputs,
-        filters,
-        kernel_size,
-        strides=(1, 1),
-        padding='same',
-        data_format='channels_last',
-        dilation_rate=(1, 1),
-        activation=None,
-        use_bias=True,
-        kernel_initializer=None,
-        bias_initializer=init_ops.zeros_initializer(),
-        kernel_regularizer=None,
-        bias_regularizer=None,
-        activity_regularizer=None,
-        kernel_constraint=None,
-        bias_constraint=None,
-        trainable=True,
-        name=None,
-        reuse=None):
-    layer = Conv2DSepctralNorm(
-        filters=filters,
-        kernel_size=kernel_size,
-        strides=strides,
-        padding=padding,
-        data_format=data_format,
-        dilation_rate=dilation_rate,
-        activation=activation,
-        use_bias=use_bias,
-        kernel_initializer=kernel_initializer,
-        bias_initializer=bias_initializer,
-        kernel_regularizer=kernel_regularizer,
-        bias_regularizer=bias_regularizer,
-        activity_regularizer=activity_regularizer,
-        kernel_constraint=kernel_constraint,
-        bias_constraint=bias_constraint,
-        trainable=trainable,
-        name=name,
-        _reuse=reuse,
-        _scope=name)
-    return layer.apply(inputs)
-
-
-# Reference from https://github.com/thisisiron/spectral_normalization-tf2/blob/master/sn.py
-# https://medium.com/@FloydHsiu0618/spectral-normalization-implementation-of-tensorflow-2-0-keras-api-d9060d26de77
-# https://github.com/tensorflow/addons/blob/master/tensorflow_addons/layers/spectral_normalization.py
-class SpectralNormalization(tf.keras.layers.Wrapper):
-    def __init__(self, layer, iteration=1, eps=1e-12, **kwargs):
-        self.iteration = iteration
-        self.eps = eps
-        if not isinstance(layer, tf.keras.layers.Layer):
-            raise ValueError(
-                'Please initialize `TimeDistributed` layer with a '
-                '`Layer` instance. You passed: {input}'.format(input=layer))
-        super(SpectralNormalization, self).__init__(layer, **kwargs)
-
-    def build(self, input_shape):
-        if not self.layer.built:
-            self.layer.build(input_shape)
-
-        if not hasattr(self.layer, 'kernel'):
-            raise ValueError(
-                '`SpectralNormalization` must wrap a layer that'
-                ' contains a `kernel` for weights')
-
-        self.w = self.layer.kernel
-        self.w_shape = self.w.shape.as_list()
-
-        self.u = self.add_weight(
-                        shape=(1, self.w_shape[-1]),
-                        initializer=tf.initializers.TruncatedNormal(stddev=0.02),
-                        trainable=False,
-                        name='sn_u',
-                        dtype=tf.float32)
-
-        super(SpectralNormalization, self).build()
-
-
-    def call(self, inputs, training=None):
-        if training is None:
-            training = tf.keras.backend.learning_phase()
-
-        if training:
-            self.normalize_weights()
-
-        output = self.layer(inputs)
-        return output
-
-    @tf.function
-    def normalize_weights(self):
-        # Spectral normalize, with power iter: 1
-        # TODO: maybe we need to assign self.w every time?
-        w_reshaped = tf.reshape(self.w, [-1, self.w_shape[-1]])
-        u_hat = self.u
-
-        for _ in range(self.iteration):
-            v_ = tf.matmul(u_hat, tf.transpose(w_reshaped))
-            v_hat = v_ / (tf.reduce_sum(v_**2)**0.5 + self.eps)
-
-            u_ = tf.matmul(v_hat, w_reshaped)
-            u_hat = u_ / (tf.reduce_sum(u_**2)**0.5 + self.eps)
-
-        sigma = tf.matmul(tf.matmul(v_hat, w_reshaped), tf.transpose(u_hat))
-
-        w_reshaped = w_reshaped / sigma
-        with tf.control_dependencies([self.u.assign(u_hat)]):
-            w_norm = tf.reshape(w_reshaped, self.w_shape)
-        self.layer.kernel.assign(w_norm)
 
 
 def dis_conv(x, cnum, ksize=(5,5), strides=(2,2), padding='same', name='conv', training=True):
@@ -255,8 +73,8 @@ def gan_hinge_loss(pos, neg, value=1., name='gan_hinge_loss'):
     gan with hinge loss:
     https://github.com/pfnet-research/sngan_projection/blob/c26cedf7384c9776bcbe5764cb5ca5376e762007/updater.py
     """
-    hinge_pos = tf.math.reduce_mean(tf.nn.relu(1-pos))
-    hinge_neg = tf.math.reduce_mean(tf.nn.relu(1+neg))
+    hinge_pos = tf.math.reduce_mean(tf.nn.relu(1.-pos))
+    hinge_neg = tf.math.reduce_mean(tf.nn.relu(1.+neg))
 
     d_loss = tf.math.add(.5 * hinge_pos, .5 * hinge_neg)
     g_loss = -tf.math.reduce_mean(neg)
