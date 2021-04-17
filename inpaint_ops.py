@@ -19,7 +19,30 @@ from summary_ops import scalar_summary
 def gen_conv(x, cnum, ksize, stride=(1,1), padding='same',
              dilation_rate=(1,1), activation="elu", name='conv', training=True):
     """Define conv for generator."""
-    #x = layers.Conv2D(cnum, ksize, stride, padding, dilation_rate=dilation_rate, activation=None, name=name)(x)
+    x = layers.Conv2D(cnum, ksize, stride, padding, dilation_rate=dilation_rate, activation=None, name=name)(x)
+
+    #if cnum == 3 or activation is None:
+    #    # conv for output
+    #    return x
+
+    x, y = tf.split(x, 2, 3)
+
+    if activation == "elu":
+        x = tf.keras.activations.elu(x)
+    elif activation == "relu":
+        x = tf.keras.activations.relu(x)
+    else:
+        raise ValueError("Unknown activations: {activation}")
+    #return x
+
+    y = tf.keras.activations.sigmoid(y)
+    x = x * y
+    return x
+
+
+def gen_sn_conv(x, cnum, ksize, stride=(1,1), padding='same',
+            dilation_rate=(1,1), activation="elu", name='conv', training=True):
+    """Define conv for generator."""
     x = SNConv2D(cnum, ksize, stride, padding, dilation_rate=dilation_rate, activation=None, name=name)(x)
 
     #if cnum == 3 or activation is None:
@@ -80,6 +103,15 @@ def gan_hinge_loss(pos, neg, value=1., name='gan_hinge_loss'):
     g_loss = -tf.math.reduce_mean(neg)
     return g_loss, d_loss, hinge_pos, hinge_neg
     # return g_loss, d_loss
+
+
+def mag_mel_weighted_map(loss_matrix, ):
+    # loss_matrix: [B, H, W, C]
+    _, H, W, _ = loss_matrix.shape
+    w = tf.linspace(tf.ones(W), tf.ones(W)*10.0, H, axis=0)
+    w = 1.-tf.experimental.numpy.log10(w)
+    w = tf.reshape(w, [1, H, W, 1])
+    return loss_matrix * w
 
 
 def random_bbox(hp):
