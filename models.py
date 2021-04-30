@@ -6,7 +6,7 @@ from tensorflow.keras import layers
 from inpaint_ops import gen_conv, dis_conv
 from inpaint_ops import contextual_attention
 
-from sn_conv import SNConv2D
+from sn_layers import SNConv2D
 
 
 # Reference from GitHub: https://github.com/JiahuiYu/generative_inpainting

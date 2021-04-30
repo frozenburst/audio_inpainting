@@ -6,6 +6,7 @@ lib/
 data/
 checkpoints/
 models/
+pretrain_models/
 example/
 *log*/
 

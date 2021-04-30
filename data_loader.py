@@ -2,13 +2,17 @@ from tqdm import tqdm
 import numpy as np
 
 
-def load_npy(filename):
-    data = np.load(filename.numpy())
-    # Normalize from 0~1 to -1~1
-    data = data * 2. - 1.
+def random_crop_img(img, length=256):
+    rand_start = np.random.randint(img.shape[1] - length)
+    return img[:, rand_start:rand_start+length]
 
-    #if label:
-    #    return data, label
+
+def load_npy(filename):
+    # H * T: [256, T]
+    data = np.load(filename)
+    # [256, 256]
+    data = random_crop_img(data)
+    data = data[:, :, np.newaxis]
     return data
 
 
@@ -24,10 +28,7 @@ def load_data_filename(filename, islabeled=False):
                 labels.append(int(line.split(' ')[1]))
     else:
         with open(filename, 'r') as f:
-            data_list = f.read().splitlines()
-            for line in tqdm(data_list):
-                data_name = line
-                data_fnames.append(data_name)
+            data_fnames = f.read().splitlines()
 
     return np.array(data_fnames), np.array(labels)
 

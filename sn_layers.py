@@ -9,6 +9,7 @@ import six
 import tensorflow as tf
 
 from tensorflow.python.framework import tensor_shape
+from tensorflow.python.framework import dtypes
 from tensorflow.python.keras import activations
 from tensorflow.python.keras import constraints
 from tensorflow.python.keras import initializers
@@ -18,38 +19,12 @@ from tensorflow.python.keras.engine.input_spec import InputSpec
 # imports for backwards namespace compatibility
 # pylint: disable=unused-import
 # pylint: enable=unused-import
+from tensorflow.python.keras import backend as K
 from tensorflow.python.keras.utils import conv_utils
+from tensorflow.python.keras.layers.ops import core as core_ops
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import nn
 from tensorflow.python.ops import nn_ops
-
-
-def kernel_spectral_norm(kernel, iteration=1, name='kernel_sn'):
-     # spectral_norm
-     def l2_norm(input_x, epsilon=1e-12):
-         input_x_norm = input_x / (tf.math.reduce_sum(input_x**2)**0.5 + epsilon)
-         return input_x_norm
-     with tf.compat.v1.variable_scope(name) as scope:
-         w_shape = kernel.get_shape().as_list()
-         w_mat = tf.reshape(kernel, [-1, w_shape[-1]])
-         u = tf.compat.v1.get_variable(
-             'u', shape=[1, w_shape[-1]],
-             initializer=tf.compat.v1.truncated_normal_initializer(),
-             trainable=False)
-
-         def power_iteration(u, ite):
-             v_ = tf.matmul(u, tf.transpose(w_mat))
-             v_hat = l2_norm(v_)
-             u_ = tf.matmul(v_hat, w_mat)
-             u_hat = l2_norm(u_)
-             return u_hat, v_hat, ite+1
-
-         u_hat, v_hat,_ = power_iteration(u, iteration)
-         sigma = tf.matmul(tf.matmul(v_hat, w_mat), tf.transpose(u_hat))
-         w_mat = w_mat / sigma
-         with tf.control_dependencies([u.assign(u_hat)]):
-             w_norm = tf.reshape(w_mat, w_shape)
-         return w_norm
 
 
 class SNConv(Layer):
@@ -113,10 +88,6 @@ class SNConv(Layer):
         self._tf_data_format = conv_utils.convert_data_format(
             self.data_format, self.rank + 2)
 
-        ## For Spectral Norm
-        self.iteration = iteration
-        self.eps = eps
-
     def _validate_init(self):
         if self.filters is not None and self.filters % self.groups != 0:
             raise ValueError(
@@ -126,18 +97,18 @@ class SNConv(Layer):
 
         if not all(self.kernel_size):
             raise ValueError('The argument `kernel_size` cannot contain 0(s). '
-                       'Received: %s' % (self.kernel_size,))
+                             'Received: %s' % (self.kernel_size,))
 
         if (self.padding == 'causal' and not isinstance(self,
-                                                    (tf.keras.layers.Conv1D, tf.keras.layers.SeparableConv1D))):
+                (tf.keras.layers.Conv1D, tf.keras.layers.SeparableConv1D))):
             raise ValueError('Causal padding is only supported for `Conv1D`'
-                               'and `SeparableConv1D`.')
+                             'and `SeparableConv1D`.')
 
     def build(self, input_shape):
         input_shape = tensor_shape.TensorShape(input_shape)
         input_channel = self._get_input_channel(input_shape)
         if input_channel % self.groups != 0:
-           raise ValueError(
+            raise ValueError(
                 'The number of input channels must be evenly divisible by the number '
                 'of groups. Received groups={}, but the input has {} channels '
                 '(full input shape is {}).'.format(self.groups, input_channel,
@@ -170,7 +141,7 @@ class SNConv(Layer):
 
         ## Spectral Norm
         self.u = self.add_weight(
-                        shape=(1, kernel_shape[-1]),
+                        shape=(1, self.kernel.shape.as_list()[-1]),
                         initializer=tf.keras.initializers.RandomNormal(),
                         trainable=False,
                         name='sn_u',
@@ -204,11 +175,7 @@ class SNConv(Layer):
         if self._is_causal:  # Apply causal padding to inputs for Conv1D.
             inputs = array_ops.pad(inputs, self._compute_causal_padding(inputs))
 
-        #norm = normalize_weights(self.kernel)
-        #self.kernel = self.normalize_weights(self.kernel)
-        #outputs = self._convolution_op(inputs, self.kernel)
         outputs = self._convolution_op(inputs, self.normalize_weights(self.kernel))
-        #outputs = self._convolution_op(inputs, kernel_spectral_norm(self.kernel, name=self.name))
 
         if self.use_bias:
             output_rank = outputs.shape.rank
@@ -233,7 +200,7 @@ class SNConv(Layer):
             return self.activation(outputs)
         return outputs
 
-    def normalize_weights(self, kernel):
+    def normalize_weights(self, kernel, iteration=1):
         # Spectral normalize, with power iter: 1
         w_shape = kernel.shape.as_list()
         w = tf.reshape(kernel, [-1, w_shape[-1]])
@@ -241,27 +208,21 @@ class SNConv(Layer):
         u_hat = self.u
         v_hat = None
 
-        for _ in range(self.iteration):
+        for _ in range(iteration):
             v_ = tf.matmul(u_hat, tf.transpose(w))
-            #v_hat = v_ / (tf.reduce_sum(v_**2)**0.5 + self.eps)
             v_hat = tf.math.l2_normalize(v_)
 
             u_ = tf.matmul(v_hat, w)
-            #u_hat = u_ / (tf.reduce_sum(u_**2)**0.5 + self.eps)
             u_hat = tf.math.l2_normalize(u_)
 
-        #u_hat = tf.identity(u_hat)
         u_hat = tf.stop_gradient(u_hat)
         v_hat = tf.stop_gradient(v_hat)
 
         sigma = tf.matmul(tf.matmul(v_hat, w), tf.transpose(u_hat))
 
         with tf.control_dependencies([self.u.assign(u_hat)]):
-            #sigma = tf.identity(sigma)
             w_norm = w / sigma
             w_norm = tf.reshape(w_norm, w_shape)
-        #w_norm = w / sigma
-        #w_norm = tf.reshape(w_norm, w_shape)
         return w_norm
 
     def compute_output_shape(self, input_shape):
@@ -394,48 +355,140 @@ class SNConv2D(SNConv):
             **kwargs)
 
 
-class Conv2DSepctralNorm(tf.keras.layers.Conv2D):
+class SNDense(Layer):
+    def __init__(self,
+                 units,
+                 activation=None,
+                 use_bias=True,
+                 kernel_initializer='glorot_uniform',
+                 bias_initializer='zeros',
+                 kernel_regularizer=None,
+                 bias_regularizer=None,
+                 activity_regularizer=None,
+                 kernel_constraint=None,
+                 bias_constraint=None,
+                 **kwargs):
+        super(SNDense, self).__init__(
+            activity_regularizer=activity_regularizer, **kwargs)
+
+        self.units = int(units) if not isinstance(units, int) else units
+        self.activation = activations.get(activation)
+        self.use_bias = use_bias
+        self.kernel_initializer = initializers.get(kernel_initializer)
+        self.bias_initializer = initializers.get(bias_initializer)
+        self.kernel_regularizer = regularizers.get(kernel_regularizer)
+        self.bias_regularizer = regularizers.get(bias_regularizer)
+        self.kernel_constraint = constraints.get(kernel_constraint)
+        self.bias_constraint = constraints.get(bias_constraint)
+
+        self.input_spec = InputSpec(min_ndim=2)
+        self.supports_masking = True
+
     def build(self, input_shape):
-        super(Conv2DSepctralNorm, self).build(input_shape)
-        self.kernel = kernel_spectral_norm(self.kernel)
+        dtype = dtypes.as_dtype(self.dtype or K.floatx())
+        if not (dtype.is_floating or dtype.is_complex):
+            raise TypeError('Unable to build `Dense` layer with non-floating point '
+                      'dtype %s' % (dtype,))
 
+        input_shape = tensor_shape.TensorShape(input_shape)
+        last_dim = tensor_shape.dimension_value(input_shape[-1])
+        if last_dim is None:
+            raise ValueError('The last dimension of the inputs to `Dense` '
+                       'should be defined. Found `None`.')
+        self.input_spec = InputSpec(min_ndim=2, axes={-1: last_dim})
+        self.kernel = self.add_weight(
+            'kernel',
+            shape=[last_dim, self.units],
+            initializer=self.kernel_initializer,
+            regularizer=self.kernel_regularizer,
+            constraint=self.kernel_constraint,
+            dtype=self.dtype,
+            trainable=True)
+        ## Spectral Norm
+        self.u = self.add_weight(
+            shape=(1, self.kernel.shape.as_list()[-1]),
+            initializer=tf.keras.initializers.RandomNormal(),
+            trainable=False,
+            name='sn_u',
+            dtype=tf.float32
+        )
+        if self.use_bias:
+            self.bias = self.add_weight(
+                'bias',
+                shape=[self.units, ],
+                initializer=self.bias_initializer,
+                regularizer=self.bias_regularizer,
+                constraint=self.bias_constraint,
+                dtype=self.dtype,
+                trainable=True)
+        else:
+            self.bias = None
+        self.built = True
 
-def conv2d_spectral_norm(
-        inputs,
-        filters,
-        kernel_size,
-        strides=(1, 1),
-        padding='valid',
-        data_format='channels_last',
-        dilation_rate=(1, 1),
-        activation=None,
-        use_bias=True,
-        kernel_initializer=None,
-        bias_initializer=tf.zeros_initializer(),
-        kernel_regularizer=None,
-        bias_regularizer=None,
-        activity_regularizer=None,
-        kernel_constraint=None,
-        bias_constraint=None,
-        trainable=True,
-        name=None):
-    layer = Conv2DSepctralNorm(
-        filters=filters,
-        kernel_size=kernel_size,
-        strides=strides,
-        padding=padding,
-        data_format=data_format,
-        dilation_rate=dilation_rate,
-        activation=activation,
-        use_bias=use_bias,
-        kernel_initializer=kernel_initializer,
-        bias_initializer=bias_initializer,
-        kernel_regularizer=kernel_regularizer,
-        bias_regularizer=bias_regularizer,
-        activity_regularizer=activity_regularizer,
-        kernel_constraint=kernel_constraint,
-        bias_constraint=bias_constraint,
-        trainable=trainable,
-        name=name,
-        dtype=inputs.dtype.base_dtype)
-    return layer.apply(inputs)
+    def call(self, inputs):
+        return core_ops.dense(
+            inputs,
+            self.normalize_weights(self.kernel),
+            self.bias,
+            self.activation,
+            dtype=self._compute_dtype_object)
+
+    def normalize_weights(self, kernel, iteration=1):
+        # Spectral normalize, with power iter: 1
+        w_shape = kernel.shape.as_list()
+        w = tf.reshape(kernel, [-1, w_shape[-1]])
+
+        u_hat = self.u
+        v_hat = None
+
+        for _ in range(iteration):
+            v_ = tf.matmul(u_hat, tf.transpose(w))
+            v_hat = tf.math.l2_normalize(v_)
+
+            u_ = tf.matmul(v_hat, w)
+            u_hat = tf.math.l2_normalize(u_)
+
+        u_hat = tf.stop_gradient(u_hat)
+        v_hat = tf.stop_gradient(v_hat)
+
+        sigma = tf.matmul(tf.matmul(v_hat, w), tf.transpose(u_hat))
+
+        with tf.control_dependencies([self.u.assign(u_hat)]):
+            w_norm = w / sigma
+            w_norm = tf.reshape(w_norm, w_shape)
+        return w_norm
+
+    def compute_output_shape(self, input_shape):
+        input_shape = tensor_shape.TensorShape(input_shape)
+        input_shape = input_shape.with_rank_at_least(2)
+        if tensor_shape.dimension_value(input_shape[-1]) is None:
+            raise ValueError(
+                'The innermost dimension of input_shape must be defined, but saw: %s'
+                % input_shape)
+        return input_shape[:-1].concatenate(self.units)
+
+    def get_config(self):
+        config = super(SNDense, self).get_config()
+        config.update({
+            'units':
+                self.units,
+            'activation':
+                activations.serialize(self.activation),
+            'use_bias':
+                self.use_bias,
+            'kernel_initializer':
+                initializers.serialize(self.kernel_initializer),
+            'bias_initializer':
+                initializers.serialize(self.bias_initializer),
+            'kernel_regularizer':
+                regularizers.serialize(self.kernel_regularizer),
+            'bias_regularizer':
+                regularizers.serialize(self.bias_regularizer),
+            'activity_regularizer':
+                regularizers.serialize(self.activity_regularizer),
+            'kernel_constraint':
+                constraints.serialize(self.kernel_constraint),
+            'bias_constraint':
+                constraints.serialize(self.bias_constraint)
+        })
+        return config
