@@ -157,6 +157,8 @@ def generator_loss(fake):
 
 def discriminator_loss(real, fake):
     loss = []
+    real_list = []
+    fake_list = []
     real_loss = 0
     fake_loss = 0
 
@@ -166,9 +168,11 @@ def discriminator_loss(real, fake):
         real_loss = -tf.math.reduce_mean(tf.math.minimum(real[i][-1] - 1, 0.0))
         fake_loss = -tf.math.reduce_mean(tf.math.minimum(-fake[i][-1] - 1, 0.0))
 
+        real_list.append(real_loss)
+        fake_list.append(fake_loss)
         loss.append(real_loss + fake_loss)
 
-    return tf.math.reduce_mean(loss)
+    return tf.math.reduce_mean(loss), tf.math.reduce_mean(real_list), tf.math.reduce_mean(fake_list)
 
 
 def feature_loss(real, fake):

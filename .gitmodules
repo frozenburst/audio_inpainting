@@ -1,0 +1,3 @@
+[submodule "libs"]
+	path = libs/mb_melgan
+	url = git@github.com:frozenburst/MultiBand_melGAN.git

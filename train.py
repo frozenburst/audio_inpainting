@@ -33,7 +33,7 @@ class hp:
     pretrain_model = 'pretrain_models/first_stage'
     checkpoint_prefix = op.join(logdir, "ckpt")
     checkpoint_restore_dir = ''
-    checkpoint_freq = 2
+    checkpoint_freq = 100
     restore_epochs = 0  # Specify for restore training.
     epochs = 10000
     steps_per_epoch = -1  # -1: whole training data.
@@ -261,27 +261,37 @@ if __name__ == "__main__":
 
                 # Calc loss
                 g_adv_loss = hp.gan_alpha * generator_loss(neg)
+                g_adv_loss = compute_global_loss(g_adv_loss)
+
                 g_kl_loss = hp.kl_alpha * kl_loss(x_pos_mean, x_pos_var)
+                g_kl_loss = compute_global_loss(g_kl_loss)
                 # We dont have pretrain weights like imagenet in audio.
                 # g_vgg_loss = hp.vgg_alpha * VGGLoss()(x_pos, x_stage2)
                 g_feature_loss = hp.feature_alpha * feature_loss(pos, neg)
+                g_feature_loss = compute_global_loss(g_feature_loss)
+
                 mean_loss = L1_loss(x_pos_mean, semap_mean)
+                mean_loss = compute_global_loss(mean_loss)
                 var_loss = L1_loss(x_pos_var, semap_var)
+                var_loss = compute_global_loss(var_loss)
                 g_sim_loss = hp.kl_sim_alpha * (mean_loss + var_loss)
 
                 g_2st_diff = tf.math.abs(x_pos - x_stage2)
                 if hp.weighted_loss:
                     g_2st_diff = mag_mel_weighted_map(g_2st_diff)
                 g_2st_loss = hp.l1_alpha * tf.math.reduce_mean(g_2st_diff)
+                g_2st_loss = compute_global_loss(g_2st_loss)
                 # Reg loos?
 
-                d_adv_loss = hp.gan_alpha * discriminator_loss(pos, neg)
+                d_adv_loss, d_real, d_fake = discriminator_loss(pos, neg)
+                d_adv_loss = hp.gan_alpha * d_adv_loss
+                d_adv_loss = compute_global_loss(d_adv_loss)
+                d_real = compute_global_loss(d_real)
+                d_fake = compute_global_loss(d_fake)
                 # Reg loss?
 
                 g_loss = g_adv_loss + g_kl_loss + g_feature_loss + g_2st_loss + g_sim_loss
-                g_loss = compute_global_loss(g_loss)
                 d_loss = d_adv_loss
-                d_loss = compute_global_loss(d_loss)
 
             # Concat list of vars into one list.
             g_vars = encoder.trainable_variables + generator.trainable_variables
@@ -295,6 +305,8 @@ if __name__ == "__main__":
             loss['s1_loss'] = g_1st_loss
             loss['s2_loss'] = g_2st_loss
             loss['d_loss'] = d_loss
+            loss['d_real'] = d_real
+            loss['d_fake'] = d_fake
             loss['g_adv_loss'] = g_adv_loss
             loss['g_loss'] = g_loss
             loss['kl_loss'] = g_kl_loss
@@ -303,7 +315,7 @@ if __name__ == "__main__":
             loss['kl_var'] = var_loss
             loss['feature_loss'] = g_feature_loss
             loss['g_adv_to_x2'] = gradient_calc(g_adv_loss, x_stage2)
-            loss['g_l1_to_x2'] = gradient_calc(g_2st_loss, x_stage2)
+            # loss['g_l1_to_x2'] = gradient_calc(g_2st_loss, x_stage2)
             loss['g_feature_to_x2'] = gradient_calc(g_feature_loss, x_stage2)
             # loss['g_kl_to_x2'] = gradient_calc(g_kl_loss, x_stage2)
             # loss['g_sim_to_x2'] = gradient_calc(g_sim_loss, x_stage2)
@@ -330,6 +342,11 @@ if __name__ == "__main__":
             # t_loss = loss_fn(x_pos, x_stage2)
             test_loss.update_state(t_loss)
             test_accuracy.update_state(x_pos, x_complete)
+
+            summary_images = [x_incomplete, x_stage1, x_stage2, x_complete, x_pos, semap]
+            summary_images = tf.concat(summary_images, axis=2)
+
+            return summary_images
 
         @tf.function
         def distributed_train_step(dataset_inputs):
@@ -418,7 +435,13 @@ if __name__ == "__main__":
             for batch_step in tqdm(range(test_steps_per_epoch)):
                 mask = create_mask()
                 x_pos = next(test_iter)
-                distributed_test_step([x_pos, mask])
+                summary_images = distributed_test_step([x_pos, mask])
+
+                if strategy.num_replicas_in_sync > 1:
+                    summary_images = summary_images.values
+                    summary_images = tf.concat(summary_images, axis=0)
+                with file_summary_writer.as_default():
+                    images_summary("Testing result", summary_images, step=step, max_outputs=hp.max_outputs)
 
             # Checkpoint save.
             if epoch % hp.checkpoint_freq == 0:
