@@ -26,3 +26,7 @@ def gradient_calc(y, x, norm=tf.math.abs):
     grad = tf.math.reduce_sum(norm(tf.gradients(y, x)))
     #scalar_summary(name, grad, step)
     return grad
+
+
+def audio_summary(name, waveform, sample_rate, step, max_outputs):
+    tf.summary.audio(name, waveform, sample_rate, step=step, max_outputs=max_outputs)

@@ -2,20 +2,24 @@ from data_loader import load_npy, load_data_filename
 from summary_ops import scalar_summary, images_summary
 from summary_ops import dict_scalar_summary
 from summary_ops import gradient_calc
+from summary_ops import audio_summary
 from inpaint_ops import random_bbox, bbox2mask, gan_hinge_loss
 from inpaint_ops import brush_stroke_mask
 from inpaint_ops import mag_mel_weighted_map
 from tqdm import tqdm
-from pretrain.models import coarse_inpaint_net
 from SPADE import image_encoder, generator, discriminator
 from sp_ops import generator_loss, discriminator_loss
 from sp_ops import feature_loss, kl_loss, L1_loss
-from sn_layers import SNConv2D
+
+from libs.mb_melgan.configs.mb_melgan import MultiBandMelGANGeneratorConfig
+from libs.mb_melgan.models.mb_melgan import TFPQMF, TFMelGANGenerator
+from utils import mag_to_mel
 
 import tensorflow as tf
 import os.path as op
 import datetime
 import math
+import yaml
 
 print(tf.__version__)
 
@@ -24,12 +28,12 @@ class hp:
     # Training setting
     data_file = 'esc50_mag'
     labeled = False  # 15:True, large:False
-    save_descript = '_spadeNet_GPU8'
+    save_descript = '_spadeNet_GPU8_addVoc'
     debug_graph = False
     training_file = op.join('./data', data_file, 'train_list.txt')
     testing_file = op.join('./data', data_file, 'test_list.txt')
     logdir = op.join('./logs', f'{data_file}{save_descript}')
-    # checkpoint_dir = op.join('./checkpoints', data_file)
+    # checkpoint_dir = op.join('./checkpoints', data_filea)
     pretrain_model = 'pretrain_models/first_stage'
     checkpoint_prefix = op.join(logdir, "ckpt")
     checkpoint_restore_dir = ''
@@ -58,7 +62,11 @@ class hp:
     vertical_margin = 0
     horizontal_margin = 0  # match with deepfill
     ir_mask = False
-    # num_classes = 50
+    # Vocoder
+    sr = 44100
+    v_ckpt = 'libs/mb_melgan/ckpt/generator-800000.h5'
+    v_config = 'libs/mb_melgan/configs/multiband_melgan.v1.yaml'
+
 
 
 if __name__ == "__main__":
@@ -142,6 +150,18 @@ if __name__ == "__main__":
         print(first_stage.summary())
         for layer in first_stage.layers:
             layer.trainable = False
+
+        # subbands = mb_melgan(mel), audios = pqmf.synthesis(subbands)
+        with open(hp.v_config) as f:
+            config = yaml.load(f, Loader=yaml.Loader)
+        mb_melgan = TFMelGANGenerator(
+            config=MultiBandMelGANGeneratorConfig(**config["multiband_melgan_generator_params"]),
+            name="multiband_melgan_generator",)
+        mb_melgan._build()
+        mb_melgan.load_weights(hp.v_ckpt)
+        pqmf = TFPQMF(
+            config=MultiBandMelGANGeneratorConfig(**config["multiband_melgan_generator_params"]), name="pqmf")
+        print(mb_melgan.summary())
 
         # TTUR
         g_lr = tf.keras.optimizers.schedules.InverseTimeDecay(
@@ -257,7 +277,17 @@ if __name__ == "__main__":
                         neg_logits.append(j_neg)
                     pos.append(pos_logits)
                     neg.append(neg_logits)
-                # pos, neg = tf.split(pos_neg, 2)
+                # Vocoder
+                x_mels = mag_to_mel(x_complete)
+                # B, X, T -> B, T, X
+                x_mels = tf.transpose(x_mels, perm=[0, 2, 1])
+                x_subbands = mb_melgan(x_mels)
+                x_audios = pqmf.synthesis(x_subbands)
+
+                pos_mels = mag_to_mel(x_pos)
+                pos_mels = tf.transpose(pos_mels, perm=[0, 2, 1])
+                pos_subbands = mb_melgan(pos_mels)
+                pos_audios = pqmf.synthesis(pos_subbands)
 
                 # Calc loss
                 g_adv_loss = hp.gan_alpha * generator_loss(neg)
@@ -323,9 +353,20 @@ if __name__ == "__main__":
             summary_images = [x_incomplete, x_stage1, x_stage2, x_complete, x_pos, semap]
             summary_images = tf.concat(summary_images, axis=2)
 
+            #with file_summary_writer.as_default():
+                #dict_scalar_summary('train loss step', step_loss, step=step)
+                #scalar_summary('train MAE loss', train_accuracy.result(), step=step)
+                #scalar_summary('G_lr', g_optimizer._decayed_lr(tf.float32), step=step)
+                #scalar_summary('D_lr', d_optimizer._decayed_lr(tf.float32), step=step)
+
+                #audio_summary("Training result/x_complete", x_audios, hp.sr, step=step, max_outputs=hp.max_outputs)
+                #audio_summary("Training result/x_pos", pos_audios, hp.sr, step=step, max_outputs=hp.max_outputs)
+            summary_audios = tf.concat([x_audios, pos_audios], axis=2)
+
             train_accuracy.update_state(x_pos, x_complete)
 
-            return loss, summary_images
+            return loss, summary_images, summary_audios
+            #return loss, summary_images
 
         def test_step(inputs):
             x_pos, mask = inputs
@@ -338,6 +379,13 @@ if __name__ == "__main__":
             G_input = [semap, x_mean, x_var]
             x_stage2 = generator(inputs=G_input, training=False)
             x_complete = x_incomplete + x_stage2 * mask
+
+            x_mels = mag_to_mel(x_complete)
+            # B, X, T -> B, T, X
+            x_mels = tf.transpose(x_mels, perm=[0, 2, 1])
+            x_subbands = mb_melgan(x_mels)
+            x_audios = pqmf.synthesis(x_subbands)
+
             t_loss = tf.math.reduce_mean(tf.math.abs(x_pos - x_stage2))
             # t_loss = loss_fn(x_pos, x_stage2)
             test_loss.update_state(t_loss)
@@ -346,18 +394,20 @@ if __name__ == "__main__":
             summary_images = [x_incomplete, x_stage1, x_stage2, x_complete, x_pos, semap]
             summary_images = tf.concat(summary_images, axis=2)
 
-            return summary_images
+            return summary_images, x_audios
 
         @tf.function
         def distributed_train_step(dataset_inputs):
-            per_replica_losses, summary_images = strategy.run(train_step, args=(dataset_inputs,))
+            per_replica_losses, summary_images, summary_audios = strategy.run(train_step, args=(dataset_inputs,))
+            #per_replica_losses, summary = strategy.run(train_step, args=(dataset_inputs,))
             for key in per_replica_losses:
                 per_replica_losses[key] = strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_losses[key], axis=None)
-            return per_replica_losses, summary_images
+            return per_replica_losses, summary_images, summary_audios
 
         @tf.function
         def distributed_test_step(dataset_inputs):
-            return strategy.run(test_step, args=(dataset_inputs,))
+            summary_images, summary_audios = strategy.run(test_step, args=(dataset_inputs,))
+            return summary_images, summary_audios
 
         if hp.debug_graph:
             inputs = tf.zeros([hp.batch_size, 256, 256, 1])
@@ -385,7 +435,7 @@ if __name__ == "__main__":
 
                 mask = create_mask()
                 x_pos = next(train_iter)
-                step_loss, summary_images = distributed_train_step([x_pos, mask])
+                step_loss, summary_images, summary_audios = distributed_train_step([x_pos, mask])
 
                 for key in step_loss:
                     if key in total_loss:
@@ -410,13 +460,19 @@ if __name__ == "__main__":
                     summary_images = summary_images.values
                     summary_images = tf.concat(summary_images, axis=0)
 
-                step = epoch * steps_per_epoch + batch_step
+                    summary_audios = summary_audios.values
+                    summary_audios = tf.concat(summary_audios, axis=0)
+                x_audios, pos_audios = tf.split(summary_audios, 2, axis=2)
+
                 with file_summary_writer.as_default():
                     dict_scalar_summary('train loss step', step_loss, step=step)
                     scalar_summary('train MAE loss', train_accuracy.result(), step=step)
                     scalar_summary('G_lr', g_optimizer._decayed_lr(tf.float32), step=step)
                     scalar_summary('D_lr', d_optimizer._decayed_lr(tf.float32), step=step)
                     images_summary("Training result", summary_images, step=step, max_outputs=hp.max_outputs)
+
+                    audio_summary("Training result/x_complete", x_audios, hp.sr, step=step, max_outputs=hp.max_outputs)
+                    audio_summary("Training result/x_pos", pos_audios, hp.sr, step=step, max_outputs=hp.max_outputs)
 
                 if hp.profile:
                     if epoch == 0 and batch_step == 9:
@@ -435,13 +491,17 @@ if __name__ == "__main__":
             for batch_step in tqdm(range(test_steps_per_epoch)):
                 mask = create_mask()
                 x_pos = next(test_iter)
-                summary_images = distributed_test_step([x_pos, mask])
+                summary_images, summary_audios = distributed_test_step([x_pos, mask])
 
                 if strategy.num_replicas_in_sync > 1:
                     summary_images = summary_images.values
                     summary_images = tf.concat(summary_images, axis=0)
+
+                    summary_audios = summary_audios.values
+                    summary_audios = tf.concat(summary_audios, axis=0)
                 with file_summary_writer.as_default():
                     images_summary("Testing result", summary_images, step=step, max_outputs=hp.max_outputs)
+                    audio_summary("Testing result", summary_audios, hp.sr, step=step, max_outputs=hp.max_outputs)
 
             # Checkpoint save.
             if epoch % hp.checkpoint_freq == 0:
