@@ -9,5 +9,6 @@ models/
 pretrain_models/
 example/
 *log*/
+output/
 
 *.swp

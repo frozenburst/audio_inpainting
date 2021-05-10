@@ -29,14 +29,14 @@ print(tf.__version__)
 class hp:
     # Training setting
     data_file = 'esc50_mag'
+    isMag = True
     labeled = False  # 15:True, large:False
-    save_descript = '_spadeNet_GPU8_addVoc_wF1Train'
+    save_descript = '_spadeNet_GPU8_noF1_noweighted'
     debug_graph = False
     training_file = op.join('./data', data_file, 'train_list.txt')
     testing_file = op.join('./data', data_file, 'test_list.txt')
     logdir = op.join('./logs', f'{data_file}{save_descript}')
-    # checkpoint_dir = op.join('./checkpoints', data_filea)
-    #pretrain_model = 'pretrain_models/first_stage'
+    # pretrain_model = 'pretrain_models/first_stage'
     checkpoint_prefix = op.join(logdir, "ckpt")
     checkpoint_restore_dir = ''
     checkpoint_freq = 100
@@ -48,7 +48,7 @@ class hp:
     max_outputs = 5
     profile = False  # profile on first epoch, batch 10~20.
     l1_alpha = 1.
-    weighted_loss = True
+    weighted_loss = False
     gan_alpha = 1.
     feature_alpha = 10.
     kl_alpha = 0.05
@@ -63,7 +63,7 @@ class hp:
     max_delta_height = 0
     max_delta_width = round(length_5sec * 0.2 * 0.1)    # decrease with this delta
     vertical_margin = 0
-    horizontal_margin = 0  # match with deepfill
+    horizontal_margin = 0
     ir_mask = False
     # Vocoder
     sr = 44100
@@ -144,13 +144,13 @@ if __name__ == "__main__":
     with strategy.scope():
         print("Build model...")
         # build first model, load pretrain weight, freeze weights.
-        first_stage, optimizer = coarse_inpaint_net(hp.image_height, hp.image_width, hp.image_channel)
+        #first_stage, optimizer = coarse_inpaint_net(hp.image_height, hp.image_width, hp.image_channel)
         # first_ckpt = tf.train.Checkpoint(
         #     optimizer=optimizer,
         #     model=first_stage)
         # first_ckpt.restore(tf.train.latest_checkpoint(hp.pretrain_weights_dir))
-        #first_stage = tf.keras.models.load_model(hp.pretrain_model)
-        print(first_stage.summary())
+        # first_stage = tf.keras.models.load_model(hp.pretrain_model)
+        #print(first_stage.summary())
         #for layer in first_stage.layers:
         #    layer.trainable = False
 
@@ -191,7 +191,7 @@ if __name__ == "__main__":
         print(discriminator.summary())
 
         checkpoint = tf.train.Checkpoint(
-                        first_stage=first_stage,
+                        #first_stage=first_stage,
                         generator_optimizer=g_optimizer,
                         discriminator_optimizer=d_optimizer,
                         encoder=encoder,
@@ -258,6 +258,7 @@ if __name__ == "__main__":
             '''
 
             with tf.GradientTape(persistent=True) as tape:
+                '''
                 # Train first stage
                 first_stage_input = [x_incomplete, mask]
                 x_stage1 = first_stage(inputs=first_stage_input, training=True)
@@ -267,6 +268,8 @@ if __name__ == "__main__":
                 g_1st_loss = hp.l1_alpha * tf.math.reduce_mean(g_1st_diff)
                 g_1st_loss = compute_global_loss(g_1st_loss)
                 semap = x_pos * (1.-mask) + x_stage1 * mask
+                '''
+                semap = x_incomplete
 
                 # Encoder
                 encoder_input = tf.concat([x_pos, semap], axis=0)
@@ -295,19 +298,21 @@ if __name__ == "__main__":
                     pos.append(pos_logits)
                     neg.append(neg_logits)
                 # Vocoder
-                x_mels = mag_to_mel(x_complete)
-                # B, X, T -> B, T, X
-                x_mels = tf.transpose(x_mels, perm=[0, 2, 1])
+                if hp.isMag:
+                    pos_mels = mag_to_mel(x_pos)
+                    incomplete_mels = mag_to_mel(x_incomplete)
+                    x_mels = mag_to_mel(x_complete)
+                else:
+                    pos_mels = x_pos
+                    incomplete_mels = x_incomplete
+                    x_mels = x_complete
+
                 x_subbands = mb_melgan(x_mels)
                 x_audios = pqmf.synthesis(x_subbands)
 
-                pos_mels = mag_to_mel(x_pos)
-                pos_mels = tf.transpose(pos_mels, perm=[0, 2, 1])
                 pos_subbands = mb_melgan(pos_mels)
                 pos_audios = pqmf.synthesis(pos_subbands)
 
-                incomplete_mels = mag_to_mel(x_incomplete)
-                incomplete_mels = tf.transpose(incomplete_mels, perm=[0, 2, 1])
                 incomplete_subbands = mb_melgan(incomplete_mels)
                 incomplete_audios = pqmf.synthesis(incomplete_subbands)
 
@@ -342,11 +347,12 @@ if __name__ == "__main__":
                 d_fake = compute_global_loss(d_fake)
                 # Reg loss?
 
-                g_loss = g_adv_loss + g_kl_loss + g_feature_loss + g_2st_loss + g_sim_loss + g_1st_loss
+                g_loss = g_adv_loss + g_kl_loss + g_feature_loss + g_2st_loss + g_sim_loss
                 d_loss = d_adv_loss
 
             # Concat list of vars into one list.
-            g_vars = first_stage.trainable_variables + encoder.trainable_variables + generator.trainable_variables
+            #g_vars = first_stage.trainable_variables + encoder.trainable_variables + generator.trainable_variables
+            g_vars = encoder.trainable_variables + generator.trainable_variables
 
             g_gradients = tape.gradient(g_loss, g_vars)
             d_gradients = tape.gradient(d_loss, discriminator.trainable_variables)
@@ -354,7 +360,7 @@ if __name__ == "__main__":
             g_optimizer.apply_gradients(zip(g_gradients, g_vars))
             d_optimizer.apply_gradients(zip(d_gradients, discriminator.trainable_variables))
 
-            loss['s1_loss'] = g_1st_loss
+            #loss['s1_loss'] = g_1st_loss
             loss['s2_loss'] = g_2st_loss
             loss['d_loss'] = d_loss
             loss['d_real'] = d_real
@@ -372,8 +378,8 @@ if __name__ == "__main__":
             # loss['g_kl_to_x2'] = gradient_calc(g_kl_loss, x_stage2)
             # loss['g_sim_to_x2'] = gradient_calc(g_sim_loss, x_stage2)
 
-            summary_images = [x_incomplete, x_stage1, x_stage2, x_complete, x_pos, semap]
-            #summary_images = [x_incomplete, x_stage2, x_complete, x_pos]
+            #summary_images = [x_incomplete, x_stage1, x_stage2, x_complete, x_pos, semap]
+            summary_images = [x_incomplete, x_stage2, x_complete, x_pos]
             summary_images = tf.concat(summary_images, axis=2)
 
             summary_audios = tf.concat([x_audios, pos_audios, incomplete_audios], axis=2)
@@ -387,38 +393,47 @@ if __name__ == "__main__":
             x_pos, mask = inputs
 
             x_incomplete = x_pos * (1.-mask)
+            '''
             first_stage_input = [x_incomplete, mask]
             x_stage1 = first_stage(inputs=first_stage_input, training=False)
             semap = x_incomplete + x_stage1 * mask
-            #semap = x_incomplete
+            '''
+            semap = x_incomplete
             x_mean, x_var = encoder(inputs=semap, training=False)
             G_input = [semap, x_mean, x_var]
             x_stage2 = generator(inputs=G_input, training=False)
             x_complete = x_incomplete + x_stage2 * mask
 
-            x_mels = mag_to_mel(x_complete)
-            # B, X, T -> B, T, X
-            x_mels = tf.transpose(x_mels, perm=[0, 2, 1])
+            if hp.isMag:
+                pos_mels = mag_to_mel(x_pos)
+                incomplete_mels = mag_to_mel(x_incomplete)
+                x_mels = mag_to_mel(x_complete)
+            else:
+                pos_mels = x_pos
+                incomplete_mels = x_incomplete
+                x_mels = x_complete
+
             x_subbands = mb_melgan(x_mels)
             x_audios = pqmf.synthesis(x_subbands)
 
-            pos_mels = mag_to_mel(x_pos)
-            pos_mels = tf.transpose(pos_mels, perm=[0, 2, 1])
             pos_subbands = mb_melgan(pos_mels)
             pos_audios = pqmf.synthesis(pos_subbands)
 
-            incomplete_mels = mag_to_mel(x_incomplete)
-            incomplete_mels = tf.transpose(incomplete_mels, perm=[0, 2, 1])
             incomplete_subbands = mb_melgan(incomplete_mels)
             incomplete_audios = pqmf.synthesis(incomplete_subbands)
 
-            t_loss = tf.math.reduce_mean(tf.math.abs(x_pos - x_stage2))
+            g_2st_diff = tf.math.abs(x_pos - x_stage2)
+            if hp.weighted_loss:
+                g_2st_diff = mag_mel_weighted_map(g_2st_diff)
+            g_2st_loss = hp.l1_alpha * tf.math.reduce_mean(g_2st_diff)
+
+            t_loss = g_2st_loss
             # t_loss = loss_fn(x_pos, x_stage2)
             test_loss.update_state(t_loss)
             test_accuracy.update_state(x_pos, x_complete)
 
-            summary_images = [x_incomplete, x_stage1, x_stage2, x_complete, x_pos, semap]
-            #summary_images = [x_incomplete, x_stage2, x_complete, x_pos]
+            #summary_images = [x_incomplete, x_stage1, x_stage2, x_complete, x_pos, semap]
+            summary_images = [x_incomplete, x_stage2, x_complete, x_pos]
             summary_images = tf.concat(summary_images, axis=2)
 
             summary_audios = tf.concat([x_audios, pos_audios, incomplete_audios], axis=2)

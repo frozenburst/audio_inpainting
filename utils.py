@@ -11,8 +11,20 @@ class hp:
     hop_length = 256
     power = 2
     max_db = 100
-    ref_db = 20
+    ref_db = 20.0
     least_amp = 1e-5
+
+
+def toSpec_db_norm(waveform):
+    stfts = tf.signal.stft(
+        waveform, frame_length=hp.win_length, frame_step=hp.hop_length, fft_length=hp.n_fft, pad_end=True)
+    spec = tf.math.abs(stfts)
+    spec = tf.math.pow(spec, 2)
+    # To decible
+    db_spec = hp.ref_db * tf.experimental.numpy.log10(tf.math.maximum(hp.least_amp, spec))
+    # Normalize
+    db_spec_norm = tf.clip_by_value(db_spec / hp.max_db, -1, 1)
+    return db_spec_norm
 
 
 def spec_denorm_deDB(spec):
@@ -23,52 +35,33 @@ def spec_denorm_deDB(spec):
     return de_db_spec
 
 
-def to_mel(spec):
-    return librosa.feature.melspectrogram(sr=hp.sr, S=spec, n_mels=hp.n_mels, htk=True, norm=None)
-
-
 def denorm_toMel_db_norm(specs):
-    mels = tf.TensorArray(tf.float32, size=specs.shape[0])
-    for i in range(specs.shape[0]):
-        #if len(spec.shape) != 3:
-        #    raise ValueError("The shapes is not as expected:", spec.shape)
-        deDB_denorm_spec = spec_denorm_deDB(specs[i])
-        #x, t, _ = deDB_denorm_spec.shape
-        #deDB_denorm_spec = np.reshape(deDB_denorm_spec, [x, t])
-        # mel = transforms.MelScale(n_mels=hp.n_mels, sample_rate=sr)(deDB_denorm_spec)
-        # Same as Pytorch
-        mel = tf.py_function(
-            func=to_mel,
-            inp=[deDB_denorm_spec],
-            Tout=tf.float32)
-        # To decible
-        #db_mel = 20 * np.log10(np.maximum(hp.least_amp, mel))
-        db_mel = 20.0 * tf.experimental.numpy.log10(tf.math.maximum(hp.least_amp, mel))
-        # Normalize
-        #db_mel_norm = np.clip(db_mel / hp.max_db, -1, 1)
-        db_mel_norm = tf.clip_by_value(db_mel / hp.max_db, -1, 1)
-        mels = mels.write(i, db_mel_norm)
-        #mels.append(db_mel_norm)
-    return mels.stack()
+    deDB_denorm_spec = spec_denorm_deDB(specs)
+    to_mel_m = tf.signal.linear_to_mel_weight_matrix(hp.n_mels, deDB_denorm_spec.shape[-1], hp.sr)
+    mel = tf.tensordot(deDB_denorm_spec, to_mel_m, 1)
+    # To decible
+    db_mel = hp.ref_db * tf.experimental.numpy.log10(tf.math.maximum(hp.least_amp, mel))
+    # Normalize
+    db_mel_norm = tf.clip_by_value(db_mel / hp.max_db, -1, 1)
+    return db_mel_norm
 
 
 def mag_to_mel(specs):
-    if len(specs.shape) != 4:
-        raise ValueError("The shapes is not as expected:", specs.shape)
-    else:
+    if len(specs.shape) == 4:
         b, h, w, c = specs.shape
         specs = tf.reshape(specs, [b, h, w])
+        # B * bins * T -> B * T * bins
+        specs = tf.transpose(specs, perm=[0, 2, 1])
         mels = denorm_toMel_db_norm(specs)
-        #breakpoint()
-        #specs.set_shape([b, h, w])
-        #mels = tf.py_function(
-        #    func=denorm_toMel_db_norm,
-        #    inp=[specs],
-        #    Tout=tf.float32)
-        #mels = tf.convert_to_tensor(mels)
-        mels.set_shape([b, hp.n_mels, w])
-        #mels = tf.reshape(mels, [b, hp.n_mels, w])
         return mels
+    elif len(specs.shape) == 2:
+        h, w = specs.shape
+        specs = tf.reshape(specs, [1, h, w])
+        specs = tf.transpose(specs, perm=[0, 2, 1])
+        mels = denorm_toMel_db_norm(specs)
+        return mels
+    else:
+        raise ValueError("The shapes is not as expected:", specs.shape)
 
 
 # Reference from GitHub: https://github.com/taki0112/SPADE-Tensorflow

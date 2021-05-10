@@ -143,7 +143,7 @@ def L1_loss(x, y):
     return loss
 
 
-def generator_loss(fake):
+def generator_loss(fake, weighted=False):
     loss = []
     fake_loss = 0
 
@@ -155,7 +155,7 @@ def generator_loss(fake):
     return tf.math.reduce_mean(loss)
 
 
-def discriminator_loss(real, fake):
+def discriminator_loss(real, fake, weighted=False):
     loss = []
     real_list = []
     fake_list = []
@@ -175,7 +175,7 @@ def discriminator_loss(real, fake):
     return tf.math.reduce_mean(loss), tf.math.reduce_mean(real_list), tf.math.reduce_mean(fake_list)
 
 
-def feature_loss(real, fake):
+def feature_loss(real, fake, weighted=False):
     loss = []
 
     for i in range(len(fake)):
