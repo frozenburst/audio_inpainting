@@ -3,14 +3,14 @@
 from pathlib import Path
 from tqdm import tqdm
 
-import torch
+import tensorflow as tf
 import numpy as np
 import os
 import os.path as op
 import librosa
 import math
-import torchaudio
-import torchaudio.transforms as transforms
+#import torchaudio
+#import torchaudio.transforms as transforms
 import matplotlib.pyplot as plt
 import argparse
 
@@ -42,13 +42,21 @@ class hp:
 
 
 def toSpec_db_norm(waveform):
-    spec = transforms.Spectrogram(
-        n_fft=hp.n_fft, win_length=hp.win_length, hop_length=hp.hop_length,
-        power=hp.power, normalized=False)(waveform)
+    stfts = tf.signal.stft(
+        waveform, frame_length=hp.win_length, frame_step=hp.hop_length, fft_length=hp.n_fft, pad_end=True)
+    spec = tf.math.abs(stfts)
+    spec = tf.math.pow(spec, 2)
     # To decible
-    db_spec = 20 * np.log10(np.maximum(hp.least_amp, spec))
+    db_spec = hp.ref_db * tf.experimental.numpy.log10(tf.math.maximum(hp.least_amp, spec))
     # Normalize
-    db_spec_norm = np.clip(db_spec / hp.max_db, -1, 1)
+    db_spec_norm = tf.clip_by_value(db_spec / hp.max_db, -1, 1)
+    #spec = transforms.Spectrogram(
+    #    n_fft=hp.n_fft, win_length=hp.win_length, hop_length=hp.hop_length,
+    #    power=hp.power, normalized=False)(waveform)
+    # To decible
+    #db_spec = 20 * np.log10(np.maximum(hp.least_amp, spec))
+    # Normalize
+    #db_spec_norm = np.clip(db_spec / hp.max_db, -1, 1)
     return db_spec_norm
 
 
@@ -56,7 +64,8 @@ def spec_denorm_deDB(spec):
     # De-normalize
     de_norm_spec = spec * hp.max_db
     # To amplitude
-    de_db_spec = np.power(10.0, de_norm_spec * 0.05)
+    #de_db_spec = np.power(10.0, de_norm_spec * 0.05)
+    de_db_spec = tf.math.pow(10.0, de_norm_spec * 0.05)
     return de_db_spec
 
 
@@ -66,11 +75,15 @@ def toMel_db_norm(deDB_denorm_spec, sr):
          n_mels=hp.n_mels, n_fft=hp.n_fft, win_length=hp.win_length, hop_length=hp.hop_length,
          power=hp.power, normalized=False)(waveform)
     '''
-    mel = transforms.MelScale(n_mels=hp.n_mels, sample_rate=sr)(deDB_denorm_spec)
+    #mel = transforms.MelScale(n_mels=hp.n_mels, sample_rate=sr)(deDB_denorm_spec)
+    to_mel_m = tf.signal.linear_to_mel_weight_matrix(hp.n_mels, deDB_denorm_spec.shape[-1], sr)
+    mel = tf.tensordot(deDB_denorm_spec, to_mel_m, 1)
     # To decible
-    db_mel = 20 * np.log10(np.maximum(hp.least_amp, mel))
+    #db_mel = 20 * np.log10(np.maximum(hp.least_amp, mel))
+    db_mel = hp.ref_db * tf.experimental.numpy.log10(tf.math.maximum(hp.least_amp, mel))
     # Normalize
-    db_mel_norm = np.clip(db_mel / hp.max_db, -1, 1)
+    #db_mel_norm = np.clip(db_mel / hp.max_db, -1, 1)
+    db_mel_norm = tf.clip_by_value(db_mel / hp.max_db, -1, 1)
     return db_mel_norm
 
 
@@ -85,7 +98,7 @@ if __name__ == "__main__":
     if op.isdir(test_path) is False:
         raise ValueError("The data folder is not exist with path:", test_path)
 
-    process_dir = 'preprocess'
+    process_dir = 'tf_preprocess'
     process_train_path = op.join(train_path, process_dir)
     process_test_path = op.join(test_path, process_dir)
     if op.isdir(process_train_path) is False:
@@ -96,28 +109,32 @@ if __name__ == "__main__":
     for audio_pth in [train_path, test_path]:
         for filename in tqdm(Path(audio_pth).glob('*.wav')):
             # print(filename)
-            waveform, sr = torchaudio.load(filename, normalize=True)
+            filename = str(filename)
+            #waveform, sr = torchaudio.load(filename, normalize=True)
+            raw_audio = tf.io.read_file(filename)
+            waveform, sr = tf.audio.decode_wav(raw_audio)
+            # waveform shape: [T, 1] -> [T]
+            waveform = tf.reshape(waveform, waveform.shape[0])
 
             if sr != hp.sr:
                 raise ValueError("Unexpected sample rate:", sr)
 
             # Trim the silence at begin, at end.
             # Pad to 5 sec.
-            trim, interval = librosa.effects.trim(waveform[0])
+            trim, interval = librosa.effects.trim(waveform)
             if trim.shape[0]/sr < hp.min_length:
-                n = math.ceil(hp.min_length*sr / trim.shape[0])
+                n = int(tf.math.ceil(hp.min_length*sr / trim.shape[0]))
                 trim = np.tile(trim, (n))[:hp.min_length * sr]
-                trim = torch.tensor(trim)
+                # trim = torch.tensor(trim)
                 # trim = trim[np.newaxis, :]
 
             # patch_length = int(hp.n_fft/2 + 1)
-            # mag shape: [n_fft//2, T]
+            # mag shape: [T, n_fft//2]
             spec = toSpec_db_norm(trim)
 
             # mel shape: [T, n_mels]
             de_spec = spec_denorm_deDB(spec)
             mel = toMel_db_norm(de_spec, sr)
-            mel = np.swapaxes(mel, 0, 1)
 
             # Save to file
             basename = op.basename(filename).split('.')[0]
@@ -130,9 +147,14 @@ if __name__ == "__main__":
 
             wav_name = op.basename(filename)
             wav_name = op.join(dir_name, wav_name)
-            trim = trim[np.newaxis, :]
-            torchaudio.save(filepath=wav_name, src=trim, sample_rate=sr)
+            trim = tf.reshape(trim, [trim.shape[0], 1])
+            raw_wav = tf.audio.encode_wav(trim, sr)
+            tf.io.write_file(wav_name, raw_wav)
+            #trim = trim[np.newaxis, :]
+            #torchaudio.save(filepath=wav_name, src=trim, sample_rate=sr)
 
+            # mag shape: [T, n_fft//2] -> [n_fft//2, T]
+            spec = tf.transpose(spec, perm=[1, 0])
             spec_name = basename + hp.mag_suffix
             spec_name = op.join(dir_name, spec_name)
             np.save(spec_name, spec)

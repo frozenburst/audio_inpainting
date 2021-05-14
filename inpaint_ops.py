@@ -81,12 +81,22 @@ def gan_hinge_loss(pos, neg, value=1., name='gan_hinge_loss'):
 
 
 def mag_mel_weighted_map(loss_matrix):
-    # loss_matrix: [B, H, W, C]
-    _, H, W, _ = loss_matrix.shape
+    if len(loss_matrix.shape) == 4:
+        # loss_matrix: [B, H, W, C]
+        _, H, W, _ = loss_matrix.shape
+    elif len(loss_matrix.shape) == 2:
+        H, W = loss_matrix.shape
+    else:
+        raise ValueError("Unexpected shape of loss_matrix", loss_matrix.shape)
     w = tf.linspace(tf.ones(W), tf.ones(W)*10.0, H, axis=0)
     w = 1.-tf.experimental.numpy.log10(w)
-    w = tf.reshape(w, [1, H, W, 1])
-    return loss_matrix * w
+    if len(loss_matrix.shape) == 4:
+        w = tf.reshape(w, [1, H, W, 1])
+    else:
+        w = tf.reshape(w, [H, W])
+    ones_w = tf.ones_like(w)
+    scaler = tf.reduce_sum(ones_w) / tf.reduce_sum(w)
+    return loss_matrix * w * scaler
 
 
 def random_bbox(hp):

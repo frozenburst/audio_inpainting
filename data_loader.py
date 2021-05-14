@@ -7,12 +7,17 @@ def random_crop_img(img, length=256):
     return img[:, rand_start:rand_start+length]
 
 
-def load_npy(filename):
+def load_npy(filename, max_length=862):
     # H * T: [256, T]
     data = np.load(filename)
-    # [256, 256]
-    data = random_crop_img(data)
+    # [256, T=5sec]
     data = data[:, :, np.newaxis]
+
+    assert data.shape[1] >= max_length, f"data is too short with shape: {data.shape}"
+
+    if data.shape[1] > max_length:
+        data = random_crop_img(data, max_length)
+
     return data
 
 
@@ -33,7 +38,8 @@ def load_data_filename(filename, islabeled=False):
     return np.array(data_fnames), np.array(labels)
 
 def get_class_name():
-    class_names = ['dog', 'rooster', 'pig', 'cow', 'frog',
+    class_names = [
+          'dog', 'rooster', 'pig', 'cow', 'frog',
           'cat', 'hen', 'insects', 'sheep', 'crow',
           'rain', 'sea_waves', 'crackling_fire', 'crickets', 'chirping_birds',
           'water_drops', 'wind', 'pouring_water', 'toilet_flush', 'thunderstorm',

@@ -9,13 +9,13 @@ import glob
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--train_path', default='/work/r08922a13/datasets/ESC-50-master/split/train/preprocess', type=str,
+parser.add_argument('--train_path', default='/work/r08922a13/datasets/maestro-v3.0.0/sr41k/train/preprocess', type=str,
                     help='The place for training data')
-parser.add_argument('--test_path', default='/work/r08922a13/datasets/ESC-50-master/split/test/preprocess', type=str,
+parser.add_argument('--test_path', default='/work/r08922a13/datasets/maestro-v3.0.0/sr41k/test/preprocess', type=str,
                     help='The place for testing data.')
-parser.add_argument('--train_file', default='../data/esc50_mel/train_list.txt', type=str,
+parser.add_argument('--train_file', default='../data/maestro/train_list.txt', type=str,
                     help='The generation name of training file list.')
-parser.add_argument('--test_file', default='../data/esc50_mel/test_list.txt', type=str,
+parser.add_argument('--test_file', default='../data/maestro/test_list.txt', type=str,
                     help='The generation name of testing file list.')
 
 
@@ -45,8 +45,8 @@ if __name__ == "__main__":
     if op.isdir(op.dirname(test_file)) is False:
         os.mkdir(op.dirname(test_file))
 
-    train_fnames = glob.glob(f"{train_path}/*{hp.mel_suffix}")
-    test_fnames = glob.glob(f"{test_path}/*{hp.mel_suffix}")
+    train_fnames = glob.glob(f"{train_path}/*{hp.mag_suffix}")
+    test_fnames = glob.glob(f"{test_path}/*{hp.mag_suffix}")
 
     length = len(train_fnames)
     length_t = len(test_fnames)

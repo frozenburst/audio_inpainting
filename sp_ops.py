@@ -2,7 +2,9 @@ import tensorflow as tf
 
 from tensorflow.keras import layers
 from utils import pytorch_xavier_weight_factor, pytorch_kaiming_weight_factor
+from utils import toSpec_db_norm
 from sn_layers import SNConv2D, SNDense
+from inpaint_ops import mag_mel_weighted_map
 
 
 # Reference from GitHub: https://github.com/taki0112/SPADE-Tensorflow
@@ -138,8 +140,11 @@ def z_sample(mean, logvar):
 ##################################################################################
 
 
-def L1_loss(x, y):
-    loss = tf.math.reduce_mean(tf.math.abs(x - y))
+def L1_loss(x, y, weighted=False):
+    loss = tf.math.abs(x - y)
+    if weighted:
+        loss = mag_mel_weighted_map(loss)
+    loss = tf.math.reduce_mean(loss)
     return loss
 
 
@@ -149,7 +154,11 @@ def generator_loss(fake, weighted=False):
 
     for i in range(len(fake)):
         # -1 means the last feature layer.
-        fake_loss = -tf.math.reduce_mean(fake[i][-1])
+        if weighted:
+            fake_loss = mag_mel_weighted_map(fake[i][-1])
+            fake_loss = -tf.math.reduce_mean(fake_loss)
+        else:
+            fake_loss = -tf.math.reduce_mean(fake[i][-1])
         loss.append(fake_loss)
 
     return tf.math.reduce_mean(loss)
@@ -165,8 +174,14 @@ def discriminator_loss(real, fake, weighted=False):
     for i in range(len(fake)):
         # -1 means the last feature, only feature loss need all pairs.
         # here is opposite way to cal hinge loss.
-        real_loss = -tf.math.reduce_mean(tf.math.minimum(real[i][-1] - 1, 0.0))
-        fake_loss = -tf.math.reduce_mean(tf.math.minimum(-fake[i][-1] - 1, 0.0))
+        if weighted:
+            real_loss = mag_mel_weighted_map(tf.math.minimum(real[i][-1] - 1, 0.0))
+            real_loss = -tf.math.reduce_mean(real_loss)
+            fake_loss = mag_mel_weighted_map(tf.math.minimum(-fake[i][-1] - 1, 0.0))
+            fake_loss = -tf.math.reduce_mean(fake_loss)
+        else:
+            real_loss = -tf.math.reduce_mean(tf.math.minimum(real[i][-1] - 1, 0.0))
+            fake_loss = -tf.math.reduce_mean(tf.math.minimum(-fake[i][-1] - 1, 0.0))
 
         real_list.append(real_loss)
         fake_list.append(fake_loss)
@@ -181,7 +196,7 @@ def feature_loss(real, fake, weighted=False):
     for i in range(len(fake)):
         intermediate_loss = 0
         for j in range(len(fake[i]) - 1):
-            intermediate_loss += L1_loss(real[i][j], fake[i][j])
+            intermediate_loss += L1_loss(real[i][j], fake[i][j], weighted)
         loss.append(intermediate_loss)
 
     return tf.math.reduce_mean(loss)
@@ -191,3 +206,16 @@ def kl_loss(mean, logvar):
     # shape : [batch_size, channel]
     loss = 0.5 * tf.reduce_sum(tf.square(mean) + tf.exp(logvar) - 1 - logvar)
     return loss
+
+
+def stft_loss(x_wave, pos_wave, weighted=False):
+    x_wave = tf.reshape(x_wave, x_wave.shape[:-1])
+    pos_wave = tf.reshape(pos_wave, pos_wave.shape[:-1])
+
+    x_stft = toSpec_db_norm(x_wave)
+    pos_stft = toSpec_db_norm(pos_wave)
+
+    x_stft = x_stft[:, :, :, tf.newaxis]
+    pos_stft = pos_stft[:, :, :, tf.newaxis]
+
+    return L1_loss(x_stft, pos_stft, weighted)

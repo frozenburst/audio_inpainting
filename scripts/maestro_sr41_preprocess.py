@@ -198,6 +198,7 @@ if __name__ == "__main__":
             if sr != hp.sr:
                 raise ValueError("Unexpected sample rate:", sr)
 
+
             # waveform shape: [T, 1] -> [T]
             waveform = tf.reshape(waveform, waveform.shape[0])
 
@@ -213,9 +214,9 @@ if __name__ == "__main__":
             dir_name = op.join(op.dirname(filename), process_dir)
 
             # wav shape: [T]
-            #wav_name = basename + hp.wav_suffix
-            #wav_name = op.join(dir_name, wav_name)
-            #np.save(wav_name, waveform)
+            wav_name = basename + hp.wav_suffix
+            wav_name = op.join(dir_name, wav_name)
+            np.save(wav_name, waveform)
 
             # mag shape: [T, n_fft//2] -> [n_fft//2, T]
             spec = tf.transpose(spec, perm=[1, 0])

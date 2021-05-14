@@ -5,11 +5,10 @@ from summary_ops import gradient_calc
 from summary_ops import audio_summary
 from inpaint_ops import random_bbox, bbox2mask, gan_hinge_loss
 from inpaint_ops import brush_stroke_mask
-from inpaint_ops import mag_mel_weighted_map
 from tqdm import tqdm
 from SPADE import image_encoder, generator, discriminator
 from sp_ops import generator_loss, discriminator_loss
-from sp_ops import feature_loss, kl_loss, L1_loss
+from sp_ops import feature_loss, kl_loss, L1_loss, stft_loss
 
 from pretrain.models import coarse_inpaint_net
 
@@ -28,10 +27,10 @@ print(tf.__version__)
 
 class hp:
     # Training setting
-    data_file = 'esc50_mag'
+    data_file = 'esc50'
     isMag = True
     labeled = False  # 15:True, large:False
-    save_descript = '_spadeNet_GPU8_noF1_noweighted'
+    save_descript = '_spadeNet_GPU8_noWeighted_m100_120'
     debug_graph = False
     training_file = op.join('./data', data_file, 'train_list.txt')
     testing_file = op.join('./data', data_file, 'test_list.txt')
@@ -53,22 +52,25 @@ class hp:
     feature_alpha = 10.
     kl_alpha = 0.05
     kl_sim_alpha = 0.05
+    vocol_loss = False
+    stft_alpha = 10.    # Serve as perceptual
     # Data
+    sr = 44100         # ljs: 22050, others: 44100
+    hop_size = 256
     image_height = 256
     image_width = 256
     image_channel = 1
-    length_5sec = 862
+    length_5sec = int((sr / hop_size) * 5)              # int() = floor()
     mask_height = 256
-    mask_width = round(length_5sec * 0.2 * 0.35)        # max of mask width
+    mask_width = round(length_5sec * 0.2 * 1.2)        # max of mask width
     max_delta_height = 0
-    max_delta_width = round(length_5sec * 0.2 * 0.1)    # decrease with this delta
+    max_delta_width = round(length_5sec * 0.2 * 0.2)    # decrease with this delta
     vertical_margin = 0
     horizontal_margin = 0
     ir_mask = False
     # Vocoder
-    sr = 44100
-    v_ckpt = 'libs/mb_melgan/ckpt/generator-800000.h5'
-    v_config = 'libs/mb_melgan/configs/multiband_melgan.v1.yaml'
+    v_ckpt = f'libs/mb_melgan/ckpt/{data_file}/generator-800000.h5'
+    v_config = f'libs/mb_melgan/configs/multiband_melgan.{data_file}_v1.yaml'
 
 
 
@@ -92,22 +94,24 @@ if __name__ == "__main__":
     print('Number of devices: {}'.format(strategy.num_replicas_in_sync))
     GLOBAL_BATCH_SIZE = hp.batch_size * strategy.num_replicas_in_sync
 
+    # padded_shape = [hp.image_height, None]
+
     print("Prefetching...")
     # Map function should update to TFRecord
     # instead of tf.py_function for better performance.
     train_dataset = tf.data.Dataset.from_tensor_slices((train_data_fnames))
     train_dataset = train_dataset.shuffle(buffer_size=len(train_data_fnames))
-    train_dataset = train_dataset.map(lambda x: tf.numpy_function(load_npy, inp=[x], Tout=tf.float32),
+    train_dataset = train_dataset.map(lambda x: tf.numpy_function(load_npy, inp=[x, hp.length_5sec], Tout=tf.float32),
                                       num_parallel_calls=tf.data.AUTOTUNE)
-    train_dataset = train_dataset.batch(GLOBAL_BATCH_SIZE)
+    train_dataset = train_dataset.batch(GLOBAL_BATCH_SIZE, drop_remainder=True)
     # train_dataset = train_dataset.shuffle(buffer_size=len(train_data_fnames)).batch(GLOBAL_BATCH_SIZE)
     train_dataset = train_dataset.prefetch(tf.data.experimental.AUTOTUNE)
     train_dataset = train_dataset.with_options(options)
 
     test_dataset = tf.data.Dataset.from_tensor_slices((test_data_fnames))
-    test_dataset = test_dataset.map(lambda x: tf.numpy_function(load_npy, inp=[x], Tout=tf.float32),
+    test_dataset = test_dataset.map(lambda x: tf.numpy_function(load_npy, inp=[x, hp.length_5sec], Tout=tf.float32),
                                     num_parallel_calls=tf.data.AUTOTUNE)
-    test_dataset = test_dataset.batch(GLOBAL_BATCH_SIZE)
+    test_dataset = test_dataset.batch(GLOBAL_BATCH_SIZE, drop_remainder=True)
     test_dataset = test_dataset.with_options(options)
 
     # print(f'training list\'s shape:{train_data.shape}, testing list\'s shape: {test_data.shape}')
@@ -241,9 +245,12 @@ if __name__ == "__main__":
 
         @tf.function
         def train_step(inputs):
-            x_pos, mask = inputs
+            x_ori, mask = inputs
+            rands = tf.experimental.numpy.random.randint(0, hp.length_5sec-hp.image_width, dtype=tf.int32)
+            x_pos = x_ori[:, :, rands:rands+hp.image_width, :]
+            x_pos.set_shape([hp.batch_size, hp.image_height, hp.image_width, hp.image_channel])
+
             loss = {}
-            # First Stage.
             x_incomplete = x_pos * (1.-mask)
             '''
             first_stage_input = [x_incomplete, mask]
@@ -298,56 +305,68 @@ if __name__ == "__main__":
                     pos.append(pos_logits)
                     neg.append(neg_logits)
                 # Vocoder
-                if hp.isMag:
-                    pos_mels = mag_to_mel(x_pos)
-                    incomplete_mels = mag_to_mel(x_incomplete)
-                    x_mels = mag_to_mel(x_complete)
-                else:
-                    pos_mels = x_pos
-                    incomplete_mels = x_incomplete
-                    x_mels = x_complete
+                pre = x_ori[:, :, :rands, :]
+                post = x_ori[:, :, rands+x_incomplete.shape[-2]:, :]
+                incomplete = tf.concat([pre, x_incomplete, post], axis=2)
+                complete = tf.concat([pre, x_complete, post], axis=2)
+                incomplete.set_shape(x_ori.shape)
+                complete.set_shape(x_ori.shape)
 
-                x_subbands = mb_melgan(x_mels)
+                if hp.isMag:
+                    pos_mels = mag_to_mel(x_ori, hp.sr)
+                    incomplete_mels = mag_to_mel(incomplete, hp.sr)
+                    x_mels = mag_to_mel(complete, hp.sr)
+                else:
+                    pos_mels = x_ori
+                    incomplete_mels = incomplete
+                    x_mels = complete
+
+                x_subbands = mb_melgan(x_mels, training=False)
                 x_audios = pqmf.synthesis(x_subbands)
 
-                pos_subbands = mb_melgan(pos_mels)
+                pos_subbands = mb_melgan(pos_mels, training=False)
                 pos_audios = pqmf.synthesis(pos_subbands)
 
-                incomplete_subbands = mb_melgan(incomplete_mels)
+                incomplete_subbands = mb_melgan(incomplete_mels, training=False)
                 incomplete_audios = pqmf.synthesis(incomplete_subbands)
 
                 # Calc loss
-                g_adv_loss = hp.gan_alpha * generator_loss(neg)
+                if hp.vocol_loss:
+                    g_vocol_loss = hp.stft_alpha * stft_loss(x_audios, pos_audios, hp.weighted_loss)
+                    g_vocol_loss = compute_global_loss(g_vocol_loss)
+
+                g_adv_loss = hp.gan_alpha * generator_loss(neg, hp.weighted_loss)
                 g_adv_loss = compute_global_loss(g_adv_loss)
 
                 g_kl_loss = hp.kl_alpha * kl_loss(x_pos_mean, x_pos_var)
                 g_kl_loss = compute_global_loss(g_kl_loss)
                 # We dont have pretrain weights like imagenet in audio.
                 # g_vgg_loss = hp.vgg_alpha * VGGLoss()(x_pos, x_stage2)
-                g_feature_loss = hp.feature_alpha * feature_loss(pos, neg)
+                g_feature_loss = hp.feature_alpha * feature_loss(pos, neg, hp.weighted_loss)
                 g_feature_loss = compute_global_loss(g_feature_loss)
 
-                mean_loss = L1_loss(x_pos_mean, semap_mean)
+                mean_loss = L1_loss(x_pos_mean, semap_mean, hp.weighted_loss)
                 mean_loss = compute_global_loss(mean_loss)
                 var_loss = L1_loss(x_pos_var, semap_var)
                 var_loss = compute_global_loss(var_loss)
                 g_sim_loss = hp.kl_sim_alpha * (mean_loss + var_loss)
 
-                g_2st_diff = tf.math.abs(x_pos - x_stage2)
-                if hp.weighted_loss:
-                    g_2st_diff = mag_mel_weighted_map(g_2st_diff)
-                g_2st_loss = hp.l1_alpha * tf.math.reduce_mean(g_2st_diff)
+                g_2st_loss = hp.l1_alpha * L1_loss(x_pos, x_stage2, hp.weighted_loss)
                 g_2st_loss = compute_global_loss(g_2st_loss)
                 # Reg loos?
 
-                d_adv_loss, d_real, d_fake = discriminator_loss(pos, neg)
+                d_adv_loss, d_real, d_fake = discriminator_loss(pos, neg, hp.weighted_loss)
                 d_adv_loss = hp.gan_alpha * d_adv_loss
                 d_adv_loss = compute_global_loss(d_adv_loss)
                 d_real = compute_global_loss(d_real)
                 d_fake = compute_global_loss(d_fake)
                 # Reg loss?
 
-                g_loss = g_adv_loss + g_kl_loss + g_feature_loss + g_2st_loss + g_sim_loss
+                if hp.vocol_loss:
+                    g_loss = g_adv_loss + g_kl_loss + g_feature_loss + g_2st_loss + g_sim_loss + g_vocol_loss
+                else:
+                    g_loss = g_adv_loss + g_kl_loss + g_feature_loss + g_2st_loss + g_sim_loss
+
                 d_loss = d_adv_loss
 
             # Concat list of vars into one list.
@@ -372,6 +391,8 @@ if __name__ == "__main__":
             loss['kl_mean'] = mean_loss
             loss['kl_var'] = var_loss
             loss['feature_loss'] = g_feature_loss
+            if hp.vocol_loss:
+                loss['vocol_loss'] = g_vocol_loss
             loss['g_adv_to_x2'] = gradient_calc(g_adv_loss, x_stage2)
             # loss['g_l1_to_x2'] = gradient_calc(g_2st_loss, x_stage2)
             loss['g_feature_to_x2'] = gradient_calc(g_feature_loss, x_stage2)
@@ -390,7 +411,10 @@ if __name__ == "__main__":
             #return loss, summary_images
 
         def test_step(inputs):
-            x_pos, mask = inputs
+            x_ori, mask, = inputs
+            rands = tf.experimental.numpy.random.randint(0, hp.length_5sec-hp.image_width, dtype=tf.int32)
+            x_pos = x_ori[:, :, rands:rands+hp.image_width, :]
+            x_pos.set_shape([hp.batch_size, hp.image_height, hp.image_width, hp.image_channel])
 
             x_incomplete = x_pos * (1.-mask)
             '''
@@ -404,28 +428,33 @@ if __name__ == "__main__":
             x_stage2 = generator(inputs=G_input, training=False)
             x_complete = x_incomplete + x_stage2 * mask
 
-            if hp.isMag:
-                pos_mels = mag_to_mel(x_pos)
-                incomplete_mels = mag_to_mel(x_incomplete)
-                x_mels = mag_to_mel(x_complete)
-            else:
-                pos_mels = x_pos
-                incomplete_mels = x_incomplete
-                x_mels = x_complete
+            # Vocoder
+            pre = x_ori[:, :, :rands, :]
+            post = x_ori[:, :, rands+x_incomplete.shape[-2]:, :]
+            incomplete = tf.concat([pre, x_incomplete, post], axis=2)
+            complete = tf.concat([pre, x_complete, post], axis=2)
+            incomplete.set_shape(x_ori.shape)
+            complete.set_shape(x_ori.shape)
 
-            x_subbands = mb_melgan(x_mels)
+            if hp.isMag:
+                pos_mels = mag_to_mel(x_ori, hp.sr)
+                incomplete_mels = mag_to_mel(incomplete, hp.sr)
+                x_mels = mag_to_mel(complete, hp.sr)
+            else:
+                pos_mels = x_ori
+                incomplete_mels = incomplete
+                x_mels = complete
+
+            x_subbands = mb_melgan(x_mels, training=False)
             x_audios = pqmf.synthesis(x_subbands)
 
-            pos_subbands = mb_melgan(pos_mels)
+            pos_subbands = mb_melgan(pos_mels, training=False)
             pos_audios = pqmf.synthesis(pos_subbands)
 
-            incomplete_subbands = mb_melgan(incomplete_mels)
+            incomplete_subbands = mb_melgan(incomplete_mels, training=False)
             incomplete_audios = pqmf.synthesis(incomplete_subbands)
 
-            g_2st_diff = tf.math.abs(x_pos - x_stage2)
-            if hp.weighted_loss:
-                g_2st_diff = mag_mel_weighted_map(g_2st_diff)
-            g_2st_loss = hp.l1_alpha * tf.math.reduce_mean(g_2st_diff)
+            g_2st_loss = hp.l1_alpha * L1_loss(x_pos, x_stage2, hp.weighted_loss)
 
             t_loss = g_2st_loss
             # t_loss = loss_fn(x_pos, x_stage2)
@@ -478,8 +507,9 @@ if __name__ == "__main__":
                 step = epoch * steps_per_epoch + batch_step
 
                 mask = create_mask()
-                x_pos = next(train_iter)
-                step_loss, summary_images, summary_audios = distributed_train_step([x_pos, mask])
+                x_ori = next(train_iter)
+
+                step_loss, summary_images, summary_audios = distributed_train_step([x_ori, mask])
 
                 for key in step_loss:
                     if key in total_loss:
@@ -525,8 +555,8 @@ if __name__ == "__main__":
             test_iter = iter(test_dist_dataset)
             for batch_step in tqdm(range(test_steps_per_epoch)):
                 mask = create_mask()
-                x_pos = next(test_iter)
-                test_images, test_audios = distributed_test_step([x_pos, mask])
+                x_ori = next(test_iter)
+                test_images, test_audios = distributed_test_step([x_ori, mask])
 
             if epoch % hp.summary_freq == 0:
                 if strategy.num_replicas_in_sync > 1:

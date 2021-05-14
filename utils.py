@@ -4,7 +4,7 @@ import librosa
 
 
 class hp:
-    sr = 44100  # Sampling rate.
+    # sr = 44100  # Sampling rate.
     n_fft = 510
     n_mels = 80
     win_length = n_fft
@@ -35,9 +35,9 @@ def spec_denorm_deDB(spec):
     return de_db_spec
 
 
-def denorm_toMel_db_norm(specs):
+def denorm_toMel_db_norm(specs, sr=None):
     deDB_denorm_spec = spec_denorm_deDB(specs)
-    to_mel_m = tf.signal.linear_to_mel_weight_matrix(hp.n_mels, deDB_denorm_spec.shape[-1], hp.sr)
+    to_mel_m = tf.signal.linear_to_mel_weight_matrix(hp.n_mels, deDB_denorm_spec.shape[-1], sr)
     mel = tf.tensordot(deDB_denorm_spec, to_mel_m, 1)
     # To decible
     db_mel = hp.ref_db * tf.experimental.numpy.log10(tf.math.maximum(hp.least_amp, mel))
@@ -46,19 +46,19 @@ def denorm_toMel_db_norm(specs):
     return db_mel_norm
 
 
-def mag_to_mel(specs):
+def mag_to_mel(specs, sr=None):
     if len(specs.shape) == 4:
         b, h, w, c = specs.shape
         specs = tf.reshape(specs, [b, h, w])
         # B * bins * T -> B * T * bins
         specs = tf.transpose(specs, perm=[0, 2, 1])
-        mels = denorm_toMel_db_norm(specs)
+        mels = denorm_toMel_db_norm(specs, sr)
         return mels
     elif len(specs.shape) == 2:
         h, w = specs.shape
-        specs = tf.reshape(specs, [1, h, w])
+        specs = specs[tf.newaxis, :, :]
         specs = tf.transpose(specs, perm=[0, 2, 1])
-        mels = denorm_toMel_db_norm(specs)
+        mels = denorm_toMel_db_norm(specs, sr)
         return mels
     else:
         raise ValueError("The shapes is not as expected:", specs.shape)
