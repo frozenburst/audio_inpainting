@@ -26,7 +26,7 @@ parser.add_argument('--folder_path', default='/work/r08922a13/datasets/maestro-v
                     help='The data root')
 parser.add_argument('--audio_path', default='/work/r08922a13/datasets/maestro-v3.0.0/sr41k/audio', type=str,
                     help='The place for audio')
-parser.add_argument('--train_path', default='/work/r08922a13/datasets//maestro-v3.0.0/sr41k/train', type=str,
+parser.add_argument('--train_path', default='/work/r08922a13/datasets/maestro-v3.0.0/sr41k/train', type=str,
                     help='The place for training data')
 parser.add_argument('--test_path', default='/work/r08922a13/datasets/maestro-v3.0.0/sr41k/test', type=str,
                     help='The place for testing data.')
@@ -147,14 +147,14 @@ if __name__ == "__main__":
                         else:
                             trim_part = trim[part*hp.max_length*sr:]
                         trim_part_trim, _ = librosa.effects.trim(trim_part)
-                        if trim_part_trim.shape[0] > hp.min_length:
+                        if trim_part_trim.shape[0]/sr > hp.min_length:
                             trim_part_trim = tf.reshape(trim_part_trim, [trim_part_trim.shape[0], 1])
                             raw_wav = tf.audio.encode_wav(trim_part_trim, sr)
                             basename = op.basename(audio).split('.')[0]
                             audio_name = f'{basename}_track{i}_{part}{hp.wav_ext}'
                             path = op.join(audio_path, audio_name)
                             tf.io.write_file(path, raw_wav)
-                        elif trim_part_trim.shape[0] > hp.max_length:
+                        elif trim_part_trim.shape[0]/sr > hp.max_length:
                             raise ValueError("Unexpected error with trimmed longer than max settings.:", trim_part_trim.shape[0])
     elif stage_chopped != 'n':
         raise ValueError(f"Unrecognized input with value: {stage_chopped}. Stop the program.")

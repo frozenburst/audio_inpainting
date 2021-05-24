@@ -27,10 +27,10 @@ print(tf.__version__)
 
 class hp:
     # Training setting
-    data_file = 'esc50'
+    data_file = 'esc50'   # esc50, maestro, ljs
     isMag = True
     labeled = False  # 15:True, large:False
-    save_descript = '_spadeNet_GPU8_noWeighted_m100_120'
+    save_descript = '_spadeNet_bs12_AllWeighted_vocol_m40_60'
     debug_graph = False
     training_file = op.join('./data', data_file, 'train_list.txt')
     testing_file = op.join('./data', data_file, 'test_list.txt')
@@ -43,26 +43,26 @@ class hp:
     epochs = 10000
     summary_freq = 50
     steps_per_epoch = -1  # -1: whole training data.
-    batch_size = 16
+    batch_size = 12
     max_outputs = 5
     profile = False  # profile on first epoch, batch 10~20.
     l1_alpha = 1.
-    weighted_loss = False
+    weighted_loss = True
     gan_alpha = 1.
     feature_alpha = 10.
     kl_alpha = 0.05
     kl_sim_alpha = 0.05
-    vocol_loss = False
+    vocol_loss = True
     stft_alpha = 10.    # Serve as perceptual
     # Data
-    sr = 44100         # ljs: 22050, others: 44100
+    sr = 44100          # ljs: 22050, others: 44100
     hop_size = 256
     image_height = 256
     image_width = 256
     image_channel = 1
     length_5sec = int((sr / hop_size) * 5)              # int() = floor()
     mask_height = 256
-    mask_width = round(length_5sec * 0.2 * 1.2)        # max of mask width
+    mask_width = round(length_5sec * 0.2 * 0.6)        # max of mask width
     max_delta_height = 0
     max_delta_width = round(length_5sec * 0.2 * 0.2)    # decrease with this delta
     vertical_margin = 0
@@ -71,7 +71,6 @@ class hp:
     # Vocoder
     v_ckpt = f'libs/mb_melgan/ckpt/{data_file}/generator-800000.h5'
     v_config = f'libs/mb_melgan/configs/multiband_melgan.{data_file}_v1.yaml'
-
 
 
 if __name__ == "__main__":
@@ -214,6 +213,7 @@ if __name__ == "__main__":
 
         # Would combine with loss_fn
         test_loss = tf.keras.metrics.Mean(name='test_loss')
+        test_weighted_loss = tf.keras.metrics.Mean(name='test_weighted_loss')
         train_accuracy = tf.keras.metrics.MeanAbsoluteError(name='train_MAE_loss')
         test_accuracy = tf.keras.metrics.MeanAbsoluteError(name='test_MAE_loss')
 
@@ -455,10 +455,12 @@ if __name__ == "__main__":
             incomplete_audios = pqmf.synthesis(incomplete_subbands)
 
             g_2st_loss = hp.l1_alpha * L1_loss(x_pos, x_stage2, hp.weighted_loss)
+            g_2st_loss_noW = hp.l1_alpha * L1_loss(x_pos, x_stage2, False)
 
-            t_loss = g_2st_loss
+            # t_loss = g_2st_loss
             # t_loss = loss_fn(x_pos, x_stage2)
-            test_loss.update_state(t_loss)
+            test_loss.update_state(g_2st_loss_noW)
+            test_weighted_loss.update_state(g_2st_loss)
             test_accuracy.update_state(x_pos, x_complete)
 
             #summary_images = [x_incomplete, x_stage1, x_stage2, x_complete, x_pos, semap]
@@ -584,6 +586,7 @@ if __name__ == "__main__":
                 scalar_summary('train MAE loss', train_accuracy.result(), step=epoch)
 
                 scalar_summary('test loss', test_loss.result(), step=epoch)
+                scalar_summary('test loss/weighted', test_weighted_loss.result(), step=epoch)
                 scalar_summary('test MAE loss', test_accuracy.result(), step=epoch)
 
             template = ("Epoch {}, Loss: {}, MAE loss: {}, Test Loss: {}, "
@@ -593,5 +596,6 @@ if __name__ == "__main__":
                                   test_accuracy.result()*100))
 
             test_loss.reset_states()
+            test_weighted_loss.reset_states()
             train_accuracy.reset_states()
             test_accuracy.reset_states()

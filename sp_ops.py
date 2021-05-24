@@ -215,6 +215,9 @@ def stft_loss(x_wave, pos_wave, weighted=False):
     x_stft = toSpec_db_norm(x_wave)
     pos_stft = toSpec_db_norm(pos_wave)
 
+    x_stft = tf.transpose(x_stft, perm=[0, 2, 1])
+    pos_stft = tf.transpose(pos_stft, perm=[0, 2, 1])
+
     x_stft = x_stft[:, :, :, tf.newaxis]
     pos_stft = pos_stft[:, :, :, tf.newaxis]
 

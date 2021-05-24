@@ -104,7 +104,7 @@ if __name__ == "__main__":
     audio_filenames = glob.glob(f'{folder_dir}/*.wav')
     num_files = len(audio_filenames)
     print(f'number of files in {folder_dir} is {num_files}')
-    '''
+
     # remove the waveform less than two seconds.
     for audio in tqdm(audio_filenames):
         raw_audio = tf.io.read_file(audio)
@@ -127,7 +127,7 @@ if __name__ == "__main__":
                 tf.io.write_file(audio, raw_wav)
             elif trim.shape[0] > waveform.shape[0]:
                 raise ValueError("Unexpected error with trimmed longer than origin.:", trim.shape[0], waveform.shape[1])
-    '''
+
     audio_filenames = glob.glob(f'{folder_dir}/*.wav')
     num_files = len(audio_filenames)
     print(f'After: number of files in {folder_dir} is {num_files}')
