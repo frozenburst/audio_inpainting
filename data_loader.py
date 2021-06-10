@@ -21,6 +21,21 @@ def load_npy(filename, max_length=862):
     return data
 
 
+def load_npy_test(filename, max_length=862):
+    # H * T: [256, T]
+    data = np.load(filename)
+    # [256, T=5sec]
+    data = data[:, :, np.newaxis]
+
+    assert data.shape[1] >= max_length, f"data is too short with shape: {data.shape}"
+
+    if data.shape[1] > max_length:
+        # data = random_crop_img(data, max_length)
+        data = data[:, :max_length]
+
+    return data, filename
+
+
 def load_data_filename(filename, islabeled=False):
     data_fnames = []
     labels = []

@@ -27,23 +27,23 @@ print(tf.__version__)
 
 class hp:
     # Training setting
-    data_file = 'esc50'   # esc50, maestro, ljs
+    data_file = 'maestro'   # esc50, maestro, ljs
     isMag = True
     labeled = False  # 15:True, large:False
-    save_descript = '_spadeNet_bs12_AllWeighted_vocol_m40_60'
+    save_descript = '_spadeNet_bs16_AllWeighted_Novocol_m10_110'
     debug_graph = False
     training_file = op.join('./data', data_file, 'train_list.txt')
     testing_file = op.join('./data', data_file, 'test_list.txt')
     logdir = op.join('./logs', f'{data_file}{save_descript}')
     # pretrain_model = 'pretrain_models/first_stage'
     checkpoint_prefix = op.join(logdir, "ckpt")
-    checkpoint_restore_dir = ''
+    checkpoint_restore_dir = './logs/maestro_spadeNet_bs16_AllWeighted_Novocol_m10_110'
     checkpoint_freq = 100
-    restore_epochs = 0  # Specify for restore training.
+    restore_epochs = 900  # Specify for restore training.
     epochs = 10000
     summary_freq = 50
     steps_per_epoch = -1  # -1: whole training data.
-    batch_size = 12
+    batch_size = 16
     max_outputs = 5
     profile = False  # profile on first epoch, batch 10~20.
     l1_alpha = 1.
@@ -52,7 +52,7 @@ class hp:
     feature_alpha = 10.
     kl_alpha = 0.05
     kl_sim_alpha = 0.05
-    vocol_loss = True
+    vocol_loss = False
     stft_alpha = 10.    # Serve as perceptual
     # Data
     sr = 44100          # ljs: 22050, others: 44100
@@ -62,9 +62,9 @@ class hp:
     image_channel = 1
     length_5sec = int((sr / hop_size) * 5)              # int() = floor()
     mask_height = 256
-    mask_width = round(length_5sec * 0.2 * 0.6)        # max of mask width
+    mask_width = round(length_5sec * 0.2 * 1.1)        # max of mask width
     max_delta_height = 0
-    max_delta_width = round(length_5sec * 0.2 * 0.2)    # decrease with this delta
+    max_delta_width = round(length_5sec * 0.2 * 1.0)    # decrease with this delta
     vertical_margin = 0
     horizontal_margin = 0
     ir_mask = False
@@ -454,7 +454,7 @@ if __name__ == "__main__":
             incomplete_subbands = mb_melgan(incomplete_mels, training=False)
             incomplete_audios = pqmf.synthesis(incomplete_subbands)
 
-            g_2st_loss = hp.l1_alpha * L1_loss(x_pos, x_stage2, hp.weighted_loss)
+            g_2st_loss = hp.l1_alpha * L1_loss(x_pos, x_stage2, True)
             g_2st_loss_noW = hp.l1_alpha * L1_loss(x_pos, x_stage2, False)
 
             # t_loss = g_2st_loss

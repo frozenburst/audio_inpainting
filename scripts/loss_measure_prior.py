@@ -81,9 +81,11 @@ if __name__ == "__main__":
         ref_spec = tf.reshape(ref_spec, [1]+ref_spec.shape+[1])
 
         inpaint_spec = np.load(filename)
+        # forget to make deep prior output to -1~1, but 0~1
+        inpaint_spec = inpaint_spec * 2. - 1.
         inpaint_spec = tf.convert_to_tensor(inpaint_spec, tf.float32)
         # h, w, _ = inpaint_spec.shape
-        inpaint_spec = tf.reshape(inpaint_spec, [1]+inpaint_spec.shape)
+        inpaint_spec = tf.reshape(inpaint_spec, [1]+inpaint_spec.shape+[1])
 
         if ref_spec.shape != inpaint_spec.shape:
             raise ValueError("Mismatch of spec shape:", ref_spec.shape, inpaint_spec.shape)
@@ -101,7 +103,7 @@ if __name__ == "__main__":
         loss_filename = op.join(loss_pth, f'{loss}_loss.txt')
         if loss == 'mae':
             loss_list = mae_list
-        elif loss == 'w_mae':
+        if loss == 'w_mae':
             loss_list = w_mae_list
         elif loss == 'psnr':
             loss_list = psnr_list

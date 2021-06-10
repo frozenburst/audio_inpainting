@@ -70,9 +70,9 @@ if __name__ == "__main__":
     psnr_list = []
     ssim_list = []
     # Measure loss of output
-    for i, filename in tqdm(enumerate(sorted(Path(output_pth).glob('*.npy')))):
+    for i, filename in tqdm(enumerate(sorted(Path(output_pth).glob('*_complete.npy')))):
         # print(i, filename)
-        file_basename = op.basename(filename)
+        file_basename = op.basename(filename).split('_complete')[0] + '.npy'
 
         ref_spec_filename = op.join(ref_spec_pth, file_basename)
         ref_spec = np.load(ref_spec_filename)

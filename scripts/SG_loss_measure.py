@@ -69,10 +69,12 @@ if __name__ == "__main__":
     w_mae_list = []
     psnr_list = []
     ssim_list = []
+
+    ext = '-mag-raw-feats.npy'
     # Measure loss of output
-    for i, filename in tqdm(enumerate(sorted(Path(output_pth).glob('*.npy')))):
+    for i, filename in tqdm(enumerate(sorted(Path(output_pth).glob('*rec-mag-raw-feats.npy')))):
         # print(i, filename)
-        file_basename = op.basename(filename)
+        file_basename = op.basename(filename).split('_')[0] + ext
 
         ref_spec_filename = op.join(ref_spec_pth, file_basename)
         ref_spec = np.load(ref_spec_filename)
@@ -83,7 +85,7 @@ if __name__ == "__main__":
         inpaint_spec = np.load(filename)
         inpaint_spec = tf.convert_to_tensor(inpaint_spec, tf.float32)
         # h, w, _ = inpaint_spec.shape
-        inpaint_spec = tf.reshape(inpaint_spec, [1]+inpaint_spec.shape)
+        inpaint_spec = tf.reshape(inpaint_spec, [1]+inpaint_spec.shape+[1])
 
         if ref_spec.shape != inpaint_spec.shape:
             raise ValueError("Mismatch of spec shape:", ref_spec.shape, inpaint_spec.shape)

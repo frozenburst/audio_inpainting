@@ -1,4 +1,4 @@
-from data_loader import load_npy, load_data_filename
+from data_loader import load_npy_test, load_data_filename
 from summary_ops import scalar_summary, images_summary
 from summary_ops import dict_scalar_summary
 from summary_ops import audio_summary
@@ -13,6 +13,7 @@ from utils import mag_to_mel
 import tensorflow as tf
 import numpy as np
 import os.path as op
+import os
 import datetime
 import math
 import yaml
@@ -22,23 +23,28 @@ print(tf.__version__)
 
 class hp:
     # Training setting
-    data_file = 'esc50'   # esc50, maestro, ljs
+    data_file = 'ljs'   # esc50, maestro, ljs
     isMag = True
     labeled = False  # 15:True, large:False
-    save_descript = '_spadeNet_bs12_AllWeighted_Novocol_m90_110'
+    save_descript = '_spadeNet_bs1_AllWeighted_Novocol_m100'
     debug_graph = False
     # training_file = op.join('./data', data_file, 'train_list.txt')
     testing_file = op.join('./data', data_file, 'test_list.txt')
     logdir = op.join('./test_logs', f'{data_file}{save_descript}')
+    is_output = True
+    is_output_wav = False
+    output_dir = op.join(logdir, 'output')
+    wave_dir = op.join(output_dir, 'wave')
+    wav_ext = '.wav'
     # pretrain_model = 'pretrain_models/first_stage'
     checkpoint_prefix = op.join(logdir, "ckpt")
-    checkpoint_restore_dir = './logs/esc50_spadeNet_bs16_AllWeighted_Novocol_m90_110'
+    checkpoint_restore_dir = './logs/ljs_spadeNet_bs16_AllWeighted_Novocol_m10_110'
     checkpoint_freq = 10000
     restore_epochs = 0  # Specify for restore training.
     epochs = 1
     # summary_freq = 50
     steps_per_epoch = -1  # -1: whole training data.
-    batch_size = 16
+    batch_size = 1
     max_outputs = 5
     profile = False  # profile on first epoch, batch 10~20.
     l1_alpha = 1.
@@ -50,7 +56,7 @@ class hp:
     vocol_loss = False
     stft_alpha = 10.    # Serve as perceptual
     # Data
-    sr = 44100          # ljs: 22050, others: 44100
+    sr = 22050          # ljs: 22050, others: 44100
     hop_size = 256
     image_height = 256
     image_width = 256
@@ -62,8 +68,12 @@ class hp:
     # max_delta_width = round(length_5sec * 0.2 * 0.2)    # decrease with this delta
     # vertical_margin = 0
     # horizontal_margin = 0
-    seg_start = round(length_5sec * 0.2 * 0)        # esc50: 0, others: 2.75
-    mask_pth = '/work/r08922a13/datasets/mask/mask_time_172.npy'
+    seg_middle = round(length_5sec * 0.2 * 3.5)        # esc50: 0, others: 2.75
+    seg_start = seg_middle - (image_width // 2)
+    # seg_start = 0
+    mask_pth = '/work/r08922a13/datasets/mask/mask_time_086.npy'
+    # 034 068 104 138 172
+    # 018 034 052 068 086
     ir_mask = False
     # Vocoder
     v_ckpt = f'libs/mb_melgan/ckpt/{data_file}/generator-800000.h5'
@@ -71,6 +81,12 @@ class hp:
 
 
 if __name__ == "__main__":
+
+    # make output dir
+    if op.isdir(hp.logdir) is False:
+        os.mkdir(hp.logdir)
+        os.mkdir(hp.output_dir)
+        os.mkdir(hp.wave_dir)
 
     # load mask
     mask = np.load(hp.mask_pth)
@@ -100,7 +116,7 @@ if __name__ == "__main__":
     # Map function should update to TFRecord
     # instead of tf.py_function for better performance.
     test_dataset = tf.data.Dataset.from_tensor_slices((test_data_fnames))
-    test_dataset = test_dataset.map(lambda x: tf.numpy_function(load_npy, inp=[x, hp.length_5sec], Tout=tf.float32),
+    test_dataset = test_dataset.map(lambda x: tf.numpy_function(load_npy_test, inp=[x, hp.length_5sec], Tout=[tf.float32, tf.string]),
                                     num_parallel_calls=tf.data.AUTOTUNE)
     test_dataset = test_dataset.batch(hp.batch_size, drop_remainder=True)
     # test_dataset = test_dataset.with_options(options)
@@ -188,7 +204,7 @@ if __name__ == "__main__":
     def test_step(inputs):
         loss = {}
 
-        x_ori, mask, = inputs
+        x_ori, mask = inputs
         rands = hp.seg_start
         x_pos = x_ori[:, :, rands:rands+hp.image_width, :]
         x_pos.set_shape([hp.batch_size, hp.image_height, hp.image_width, hp.image_channel])
@@ -205,7 +221,8 @@ if __name__ == "__main__":
         pre = x_ori[:, :, :rands, :]
         post = x_ori[:, :, rands+x_incomplete.shape[-2]:, :]
         incomplete = tf.concat([pre, x_incomplete, post], axis=2)
-        complete = tf.concat([pre, x_complete, post], axis=2)
+        # complete = tf.concat([pre, x_complete, post], axis=2)
+        complete = tf.concat([pre, x_stage2, post], axis=2)
         incomplete.set_shape(x_ori.shape)
         complete.set_shape(x_ori.shape)
 
@@ -227,8 +244,8 @@ if __name__ == "__main__":
         incomplete_subbands = mb_melgan(incomplete_mels, training=False)
         incomplete_audios = pqmf.synthesis(incomplete_subbands)
 
-        g_2st_loss = hp.l1_alpha * L1_loss(x_pos, x_stage2, True)
-        g_2st_loss_noW = hp.l1_alpha * L1_loss(x_pos, x_stage2, False)
+        g_2st_loss = hp.l1_alpha * L1_loss(x_pos, x_complete, True)
+        g_2st_loss_noW = hp.l1_alpha * L1_loss(x_pos, x_complete, False)
 
         # t_loss = g_2st_loss
         # t_loss = loss_fn(x_pos, x_stage2)
@@ -266,7 +283,7 @@ if __name__ == "__main__":
         for batch_step in tqdm(range(test_steps_per_epoch)):
             step = epoch * test_steps_per_epoch + batch_step
             # mask = create_mask()
-            x_ori = next(test_iter)
+            x_ori, filename = next(test_iter)
             step_loss, test_images, test_audios = test_step([x_ori, mask])
 
             for key in step_loss:
@@ -276,6 +293,7 @@ if __name__ == "__main__":
                     total_loss[key] = step_loss[key]
             num_batches += 1
 
+            img_incomplete, img_stage2, img_complete, img_pos = tf.split(test_images, 4, axis=2)
             test_x, test_pos, test_incomplete = tf.split(test_audios, 3, axis=2)
             with file_summary_writer.as_default():
                 dict_scalar_summary('test loss step', step_loss, step=step)
@@ -284,16 +302,47 @@ if __name__ == "__main__":
                 audio_summary("Testing result/x_pos", test_pos, hp.sr, step=step, max_outputs=hp.max_outputs)
                 audio_summary("Testing result/x_incomplete", test_incomplete, hp.sr, step=step, max_outputs=hp.max_outputs)
 
+            if hp.is_output:
+                assert hp.batch_size == 1, print("Batch_size should be 1 for save output.")
+
+                incomplete_name = op.basename(str(filename[0])).split('-mag-')[0] + '_incomplete'
+                np_incomplete_name = op.join(hp.output_dir, incomplete_name)
+                wav_incomplete_name = op.join(hp.wave_dir, incomplete_name) + hp.wav_ext
+                np.save(np_incomplete_name, img_incomplete[0])
+                if hp.is_output_wav:
+                    incomplete_wav = tf.audio.encode_wav(test_incomplete[0], hp.sr)
+                    tf.io.write_file(wav_incomplete_name, incomplete_wav)
+
+                complete_name = op.basename(str(filename[0])).split('-mag-')[0] + '_complete'
+                np_complete_name = op.join(hp.output_dir, complete_name)
+                wav_complete_name = op.join(hp.wave_dir, complete_name) + hp.wav_ext
+                np.save(np_complete_name, img_complete[0])
+                if hp.is_output_wav:
+                    complete_wav = tf.audio.encode_wav(test_x[0], hp.sr)
+                    tf.io.write_file(wav_complete_name, complete_wav)
+
+                stage2_name = op.basename(str(filename[0])).split('-mag-')[0] + '_stage2'
+                np_stage2_name = op.join(hp.output_dir, stage2_name)
+                np.save(np_stage2_name, img_stage2[0])
+
+                ori_name = op.basename(str(filename[0])).split('-mag-')[0] + '_ori'
+                np_ori_name = op.join(hp.output_dir, ori_name)
+                wav_ori_name = op.join(hp.wave_dir, ori_name) + hp.wav_ext
+                np.save(np_ori_name, img_pos[0])
+                if hp.is_output_wav:
+                    ori_wav = tf.audio.encode_wav(test_pos[0], hp.sr)
+                    tf.io.write_file(wav_ori_name, ori_wav)
+
+        for key in total_loss:
+            total_loss[key] = total_loss[key] / num_batches
+            print(f'Loss: {key} is value: {total_loss[key]}')
+
             # Write to tensorboard.
         with file_summary_writer.as_default():
             dict_scalar_summary('test loss epoch', total_loss, step=epoch)
             scalar_summary('test loss', test_loss.result(), step=epoch)
             scalar_summary('test loss/weighted', test_weighted_loss.result(), step=epoch)
             scalar_summary('test MAE loss', test_accuracy.result(), step=epoch)
-
-        for key in total_loss:
-            total_loss[key] = total_loss[key] / num_batches
-            print(f'Loss: {key} is value: {total_loss[key]}')
 
         test_loss.reset_states()
         test_weighted_loss.reset_states()
