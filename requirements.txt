@@ -1,0 +1,8 @@
+docopt
+flake8
+imageio
+numpy=1.19
+soundfile
+tensorflow-gpu=2.4.1
+python=3.8
+tqdm

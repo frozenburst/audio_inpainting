@@ -1,1 +1,1 @@
-# audio_inpainting
+# Audio_inpainting1. git clone repo2. cd audio_inpainting3. git submodule updata --init
