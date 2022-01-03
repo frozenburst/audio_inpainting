@@ -3,14 +3,12 @@ from summary_ops import scalar_summary, images_summary
 from summary_ops import dict_scalar_summary
 from summary_ops import gradient_calc
 from summary_ops import audio_summary
-from inpaint_ops import random_bbox, bbox2mask, gan_hinge_loss
+from inpaint_ops import random_bbox, bbox2mask
 from inpaint_ops import brush_stroke_mask
 from tqdm import tqdm
 from SPADE import image_encoder, generator, discriminator
 from sp_ops import generator_loss, discriminator_loss
 from sp_ops import feature_loss, kl_loss, L1_loss, stft_loss
-
-from pretrain.models import coarse_inpaint_net
 
 from libs.mb_melgan.configs.mb_melgan import MultiBandMelGANGeneratorConfig
 from libs.mb_melgan.models.mb_melgan import TFPQMF, TFMelGANGenerator
@@ -35,7 +33,6 @@ class hp:
     training_file = op.join('./data', data_file, 'train_list.txt')
     testing_file = op.join('./data', data_file, 'test_list.txt')
     logdir = op.join('./logs', f'{data_file}{save_descript}')
-    # pretrain_model = 'pretrain_models/first_stage'
     checkpoint_prefix = op.join(logdir, "ckpt")
     checkpoint_restore_dir = './logs/maestro_spadeNet_bs16_AllWeighted_Novocol_m10_110'
     checkpoint_freq = 100
@@ -86,14 +83,12 @@ if __name__ == "__main__":
     strategy = tf.distribute.MirroredStrategy()
 
     # It seems that the auto share is not avalibel for our data type.
-    # How ever it should be tf.data.experimental.AutoShardPolicy.FILE since the files >> workers.
+    # However it should be tf.data.experimental.AutoShardPolicy.FILE since the files >> workers.
     # If transfering data type to TFRecord, it will be good to FILE share policy.
     options = tf.data.Options()
     options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.DATA
     print('Number of devices: {}'.format(strategy.num_replicas_in_sync))
     GLOBAL_BATCH_SIZE = hp.batch_size * strategy.num_replicas_in_sync
-
-    # padded_shape = [hp.image_height, None]
 
     print("Prefetching...")
     # Map function should update to TFRecord
@@ -103,7 +98,6 @@ if __name__ == "__main__":
     train_dataset = train_dataset.map(lambda x: tf.numpy_function(load_npy, inp=[x, hp.length_5sec], Tout=tf.float32),
                                       num_parallel_calls=tf.data.AUTOTUNE)
     train_dataset = train_dataset.batch(GLOBAL_BATCH_SIZE, drop_remainder=True)
-    # train_dataset = train_dataset.shuffle(buffer_size=len(train_data_fnames)).batch(GLOBAL_BATCH_SIZE)
     train_dataset = train_dataset.prefetch(tf.data.experimental.AUTOTUNE)
     train_dataset = train_dataset.with_options(options)
 
@@ -146,18 +140,6 @@ if __name__ == "__main__":
 
     with strategy.scope():
         print("Build model...")
-        # build first model, load pretrain weight, freeze weights.
-        #first_stage, optimizer = coarse_inpaint_net(hp.image_height, hp.image_width, hp.image_channel)
-        # first_ckpt = tf.train.Checkpoint(
-        #     optimizer=optimizer,
-        #     model=first_stage)
-        # first_ckpt.restore(tf.train.latest_checkpoint(hp.pretrain_weights_dir))
-        # first_stage = tf.keras.models.load_model(hp.pretrain_model)
-        #print(first_stage.summary())
-        #for layer in first_stage.layers:
-        #    layer.trainable = False
-
-        # subbands = mb_melgan(mel), audios = pqmf.synthesis(subbands)
         with open(hp.v_config) as f:
             config = yaml.load(f, Loader=yaml.Loader)
         mb_melgan = TFMelGANGenerator(
@@ -194,7 +176,6 @@ if __name__ == "__main__":
         print(discriminator.summary())
 
         checkpoint = tf.train.Checkpoint(
-                        #first_stage=first_stage,
                         generator_optimizer=g_optimizer,
                         discriminator_optimizer=d_optimizer,
                         encoder=encoder,
@@ -252,30 +233,8 @@ if __name__ == "__main__":
 
             loss = {}
             x_incomplete = x_pos * (1.-mask)
-            '''
-            first_stage_input = [x_incomplete, mask]
-            x_stage1 = first_stage(inputs=first_stage_input, training=False)
-
-            g_1st_diff = tf.math.abs(x_pos - x_stage1)
-            if hp.weighted_loss:
-                g_1st_diff = mag_mel_weighted_map(g_1st_diff)
-            g_1st_loss = compute_global_loss(tf.math.reduce_mean(g_1st_diff))
-            # First stage incomplete
-            semap = x_pos * (1.-mask) + x_stage1 * mask
-            '''
 
             with tf.GradientTape(persistent=True) as tape:
-                '''
-                # Train first stage
-                first_stage_input = [x_incomplete, mask]
-                x_stage1 = first_stage(inputs=first_stage_input, training=True)
-                g_1st_diff = tf.math.abs(x_pos - x_stage1)
-                if hp.weighted_loss:
-                    g_1st_diff = mag_mel_weighted_map(g_1st_diff)
-                g_1st_loss = hp.l1_alpha * tf.math.reduce_mean(g_1st_diff)
-                g_1st_loss = compute_global_loss(g_1st_loss)
-                semap = x_pos * (1.-mask) + x_stage1 * mask
-                '''
                 semap = x_incomplete
 
                 # Encoder
@@ -370,7 +329,6 @@ if __name__ == "__main__":
                 d_loss = d_adv_loss
 
             # Concat list of vars into one list.
-            #g_vars = first_stage.trainable_variables + encoder.trainable_variables + generator.trainable_variables
             g_vars = encoder.trainable_variables + generator.trainable_variables
 
             g_gradients = tape.gradient(g_loss, g_vars)
@@ -379,7 +337,6 @@ if __name__ == "__main__":
             g_optimizer.apply_gradients(zip(g_gradients, g_vars))
             d_optimizer.apply_gradients(zip(d_gradients, discriminator.trainable_variables))
 
-            #loss['s1_loss'] = g_1st_loss
             loss['s2_loss'] = g_2st_loss
             loss['d_loss'] = d_loss
             loss['d_real'] = d_real
@@ -394,12 +351,8 @@ if __name__ == "__main__":
             if hp.vocol_loss:
                 loss['vocol_loss'] = g_vocol_loss
             loss['g_adv_to_x2'] = gradient_calc(g_adv_loss, x_stage2)
-            # loss['g_l1_to_x2'] = gradient_calc(g_2st_loss, x_stage2)
             loss['g_feature_to_x2'] = gradient_calc(g_feature_loss, x_stage2)
-            # loss['g_kl_to_x2'] = gradient_calc(g_kl_loss, x_stage2)
-            # loss['g_sim_to_x2'] = gradient_calc(g_sim_loss, x_stage2)
 
-            #summary_images = [x_incomplete, x_stage1, x_stage2, x_complete, x_pos, semap]
             summary_images = [x_incomplete, x_stage2, x_complete, x_pos]
             summary_images = tf.concat(summary_images, axis=2)
 
@@ -408,7 +361,6 @@ if __name__ == "__main__":
             train_accuracy.update_state(x_pos, x_complete)
 
             return loss, summary_images, summary_audios
-            #return loss, summary_images
 
         def test_step(inputs):
             x_ori, mask, = inputs
@@ -417,11 +369,6 @@ if __name__ == "__main__":
             x_pos.set_shape([hp.batch_size, hp.image_height, hp.image_width, hp.image_channel])
 
             x_incomplete = x_pos * (1.-mask)
-            '''
-            first_stage_input = [x_incomplete, mask]
-            x_stage1 = first_stage(inputs=first_stage_input, training=False)
-            semap = x_incomplete + x_stage1 * mask
-            '''
             semap = x_incomplete
             x_mean, x_var = encoder(inputs=semap, training=False)
             G_input = [semap, x_mean, x_var]
@@ -457,13 +404,10 @@ if __name__ == "__main__":
             g_2st_loss = hp.l1_alpha * L1_loss(x_pos, x_stage2, True)
             g_2st_loss_noW = hp.l1_alpha * L1_loss(x_pos, x_stage2, False)
 
-            # t_loss = g_2st_loss
-            # t_loss = loss_fn(x_pos, x_stage2)
             test_loss.update_state(g_2st_loss_noW)
             test_weighted_loss.update_state(g_2st_loss)
             test_accuracy.update_state(x_pos, x_complete)
 
-            #summary_images = [x_incomplete, x_stage1, x_stage2, x_complete, x_pos, semap]
             summary_images = [x_incomplete, x_stage2, x_complete, x_pos]
             summary_images = tf.concat(summary_images, axis=2)
 
@@ -474,7 +418,6 @@ if __name__ == "__main__":
         @tf.function
         def distributed_train_step(dataset_inputs):
             per_replica_losses, summary_images, summary_audios = strategy.run(train_step, args=(dataset_inputs,))
-            #per_replica_losses, summary = strategy.run(train_step, args=(dataset_inputs,))
             for key in per_replica_losses:
                 per_replica_losses[key] = strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_losses[key], axis=None)
             return per_replica_losses, summary_images, summary_audios
@@ -498,7 +441,6 @@ if __name__ == "__main__":
         # Experiment Epoch
         for epoch in range(hp.restore_epochs, hp.epochs+hp.restore_epochs):
             total_loss = {}
-            # total_loss = 0.0
             num_batches = 0
             summary_images_list = []
 
@@ -518,7 +460,6 @@ if __name__ == "__main__":
                         total_loss[key] += step_loss[key]
                     else:
                         total_loss[key] = step_loss[key]
-                # total_loss += step_loss
 
                 num_batches += 1
 

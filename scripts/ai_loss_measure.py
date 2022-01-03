@@ -15,10 +15,8 @@ from tqdm import tqdm
 
 import numpy as np
 import tensorflow as tf
-# import matplotlib.pyplot as plt
 import os.path as op
 import os
-import math
 
 
 def l1_loss(x, y):
@@ -71,7 +69,6 @@ if __name__ == "__main__":
     ssim_list = []
     # Measure loss of output
     for i, filename in tqdm(enumerate(sorted(Path(output_pth).glob('*_complete.npy')))):
-        # print(i, filename)
         file_basename = op.basename(filename).split('_complete')[0] + '.npy'
 
         ref_spec_filename = op.join(ref_spec_pth, file_basename)
@@ -109,10 +106,6 @@ if __name__ == "__main__":
             loss_list = ssim_list
 
         with open(loss_filename, 'w') as f:
-        # f.write("#list_id, min, max, mean, percentile")
             for content in sorted(loss_list):
                 f.write(f'{content}\n')
-            #arr = np.array(sorted(dict_category_list[a_list]))
-            #s1, s2, s3 = np.percentile(arr, [25, 50, 75])
-            #f.write("%s %s %s %s %s %s %s\n" %(a_list, arr.min(), arr.max(), arr.mean(), s1, s2, s3))
         print("Save loss file to:", loss_filename)

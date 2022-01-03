@@ -13,8 +13,6 @@ import librosa
 import glob
 import random
 import argparse
-#import torchaudio
-#import torchaudio.transforms as transforms
 
 
 # 1/8 to make sure balanced data.
@@ -22,11 +20,11 @@ _NUM_TEST = 0.1
 _NUM_CLASS = 0
 _NUM_PART = 0
 parser = argparse.ArgumentParser()
-parser.add_argument('--folder_path', default='/work/r08922a13/datasets/LJSpeech-1.1/wavs', type=str,
+parser.add_argument('--folder_path', default='/your/workspace/datasets/LJSpeech-1.1/wavs', type=str,
                     help='The data root')
-parser.add_argument('--train_path', default='/work/r08922a13/datasets/LJSpeech-1.1/train', type=str,
+parser.add_argument('--train_path', default='/your/workspace/datasets/LJSpeech-1.1/train', type=str,
                     help='The place for training data')
-parser.add_argument('--test_path', default='/work/r08922a13/datasets/LJSpeech-1.1/test', type=str,
+parser.add_argument('--test_path', default='/your/workspace/datasets/LJSpeech-1.1/test', type=str,
                     help='The place for testing data.')
 
 
@@ -34,7 +32,6 @@ class hp:
     sr = 22050  # Sampling rate. LJS:22050
     n_fft = 510     # let height of spec be 256
     win_length = n_fft
-    # hop_length = win_length // 2    # 256
     hop_length = 256    # fix due to 510/2 = 255
     n_mels = 80
     power = 2

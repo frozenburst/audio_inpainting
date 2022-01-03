@@ -14,11 +14,11 @@ _NUM_TEST = 0.125
 _NUM_CLASS = 50
 _NUM_PART = 5
 parser = argparse.ArgumentParser()
-parser.add_argument('--folder_path', default='/work/r08922a13/datasets/ESC-50-master/audio', type=str,
+parser.add_argument('--folder_path', default='/your/workspace/datasets/ESC-50-master/audio', type=str,
                     help='The data root')
-parser.add_argument('--train_path', default='/work/r08922a13/datasets/ESC-50-master/split/train', type=str,
+parser.add_argument('--train_path', default='/your/workspace/datasets/ESC-50-master/split/train', type=str,
                     help='The place for training data')
-parser.add_argument('--test_path', default='/work/r08922a13/datasets/ESC-50-master/split/test', type=str,
+parser.add_argument('--test_path', default='/your/workspace/datasets/ESC-50-master/split/test', type=str,
                     help='The place for testing data.')
 
 

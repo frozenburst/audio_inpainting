@@ -1,7 +1,7 @@
 import tensorflow as tf
 
 from tensorflow.keras import layers
-from utils import pytorch_xavier_weight_factor, pytorch_kaiming_weight_factor
+from utils import pytorch_xavier_weight_factor
 from utils import toSpec_db_norm
 from sn_layers import SNConv2D, SNDense
 from inpaint_ops import mag_mel_weighted_map

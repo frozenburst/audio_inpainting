@@ -14,21 +14,19 @@ import librosa
 import glob
 import random
 import argparse
-#import torchaudio
-#import torchaudio.transforms as transforms
 
 # 1/8 to make sure balanced data.
 _NUM_TEST = 0.1
 _NUM_CLASS = 0
 _NUM_PART = 0
 parser = argparse.ArgumentParser()
-parser.add_argument('--folder_path', default='/work/r08922a13/datasets/maestro-v3.0.0', type=str,
+parser.add_argument('--folder_path', default='/your/workspace/datasets/maestro-v3.0.0', type=str,
                     help='The data root')
-parser.add_argument('--audio_path', default='/work/r08922a13/datasets/maestro-v3.0.0/sr41k/audio', type=str,
+parser.add_argument('--audio_path', default='/your/workspace/datasets/maestro-v3.0.0/sr41k/audio', type=str,
                     help='The place for audio')
-parser.add_argument('--train_path', default='/work/r08922a13/datasets/maestro-v3.0.0/sr41k/train', type=str,
+parser.add_argument('--train_path', default='/your/workspace/datasets/maestro-v3.0.0/sr41k/train', type=str,
                     help='The place for training data')
-parser.add_argument('--test_path', default='/work/r08922a13/datasets/maestro-v3.0.0/sr41k/test', type=str,
+parser.add_argument('--test_path', default='/your/workspace/datasets/maestro-v3.0.0/sr41k/test', type=str,
                     help='The place for testing data.')
 
 
@@ -36,7 +34,6 @@ class hp:
     sr = 44100  # Sampling rate. maestro-v3.0.0
     n_fft = 510     # let height of spec be 256 (nfft/2 +1)
     win_length = n_fft
-    # hop_length = win_length // 2    # 256
     hop_length = 256    # fix due to 510/2 = 255
     n_mels = 80
     power = 2
@@ -119,7 +116,6 @@ if __name__ == "__main__":
     num_unexpected_sr = 0
     if stage_chopped == 'y':
         for audio in tqdm(audio_filenames):
-            #waveform, sr = torchaudio.load(audio, normalize=True)
             raw_audio = tf.io.read_file(audio)
             waveform, sr = tf.audio.decode_wav(raw_audio)
             if sr != hp.sr:
@@ -191,13 +187,11 @@ if __name__ == "__main__":
     # Extract features
     for audio_pth in [train_path, test_path]:
         for filename in tqdm(Path(audio_pth).glob('*.wav')):
-            #waveform, sr = torchaudio.load(filename, normalize=True)
             filename = str(filename)
             raw_audio = tf.io.read_file(filename)
             waveform, sr = tf.audio.decode_wav(raw_audio)
             if sr != hp.sr:
                 raise ValueError("Unexpected sample rate:", sr)
-
 
             # waveform shape: [T, 1] -> [T]
             waveform = tf.reshape(waveform, waveform.shape[0])

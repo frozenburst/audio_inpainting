@@ -8,11 +8,11 @@ import argparse
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--audio_path', default='/work/r08922a13/datasets/maestro-v3.0.0/sr41k/audio', type=str,
+parser.add_argument('--audio_path', default='/your/workspace/datasets/maestro-v3.0.0/sr41k/audio', type=str,
                     help='The place for audio')
-parser.add_argument('--train_path', default='/work/r08922a13/datasets/maestro-v3.0.0/sr41k/train', type=str,
+parser.add_argument('--train_path', default='/your/workspace/datasets/maestro-v3.0.0/sr41k/train', type=str,
                     help='The place for training data')
-parser.add_argument('--test_path', default='/work/r08922a13/datasets/maestro-v3.0.0/sr41k/test', type=str,
+parser.add_argument('--test_path', default='/your/workspace/datasets/maestro-v3.0.0/sr41k/test', type=str,
                     help='The place for testing data.')
 
 
@@ -20,7 +20,6 @@ class hp:
     sr = 44100  # Sampling rate. maestro-v3.0.0
     n_fft = 510     # let height of spec be 256 (nfft/2 +1)
     win_length = n_fft
-    # hop_length = win_length // 2    # 256
     hop_length = 256    # fix due to 510/2 = 255
     n_mels = 80
     power = 2
@@ -63,7 +62,6 @@ if __name__ == "__main__":
 
             if waveform.shape[0]/sr < hp.min_length:
                 audio_names = op.basename(audio).split('.')[0]
-                # path = op.join(wav_path, process_dir)
                 path = wav_path
                 filenames = op.join(path, audio_names)
                 remove_files = glob.glob(f'{filenames}*')

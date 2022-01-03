@@ -4,8 +4,6 @@ from inpaint_ops import mag_mel_weighted_map
 from tqdm import tqdm
 from SPADE import image_encoder, generator, discriminator
 
-from pretrain.models import coarse_inpaint_net
-
 from libs.mb_melgan.configs.mb_melgan import MultiBandMelGANGeneratorConfig
 from libs.mb_melgan.models.mb_melgan import TFPQMF, TFMelGANGenerator
 from utils import mag_to_mel, toSpec_db_norm
@@ -30,21 +28,12 @@ class hp:
     data_file = 'esc50_mag'
     isMag = True
     labeled = False  # 15:True, large:False
-    checkpoint_restore_dir = '/work/r08922a13/audio_inpainting/logs/esc50_mag_spadeNet_GPU8_Voc_noF1'
-    #testing_file = op.join('./data', data_file, 'test_list.txt')
-    #logdir = op.join('./logs', f'{data_file}{save_descript}')
+    checkpoint_restore_dir = '/path/to/your/checkpoint/audio_inpainting/logs/esc50_mag_spadeNet_GPU8_Voc_noF1'
     output_dir = op.join('./output', op.basename(checkpoint_restore_dir))
     wav_ext = '.wav'
     img_ext = '.png'
-    #checkpoint_prefix = op.join(logdir, "ckpt")
-    #checkpoint_freq = 100
-    #restore_epochs = 0  # Specify for restore training.
-    #epochs = 10000
-    #summary_freq = 50
     steps_per_epoch = -1  # -1: whole training data.
     batch_size = 16
-    #max_outputs = 5
-    #profile = False  # profile on first epoch, batch 10~20.
     l1_alpha = 1.
     weighted_loss = False
     gan_alpha = 1.
@@ -121,7 +110,6 @@ if __name__ == "__main__":
                         per_spec = tf.reshape(per_spec, per_spec.shape[:] + [1])
                         specs.append(per_spec)
                     last_spec = spec[:, batch*hp.image_width:]
-                    #last_spec = tf.reshape(last_spec, [last_spec.shape[:], 1])
 
                 if batch <= hp.batch_size:
                     test_batch = batch
@@ -134,18 +122,7 @@ if __name__ == "__main__":
                 test_dataset = test_dataset.batch(test_batch)
 
     print("Build model...")
-    # build first model, load pretrain weight, freeze weights.
-    #first_stage, optimizer = coarse_inpaint_net(hp.image_height, hp.image_width, hp.image_channel)
-    # first_ckpt = tf.train.Checkpoint(
-    #     optimizer=optimizer,
-    #     model=first_stage)
-    # first_ckpt.restore(tf.train.latest_checkpoint(hp.pretrain_weights_dir))
-    # first_stage = tf.keras.models.load_model(hp.pretrain_model)
-    #print(first_stage.summary())
-    #for layer in first_stage.layers:
-    #    layer.trainable = False
 
-    # subbands = mb_melgan(mel), audios = pqmf.synthesis(subbands)
     with open(hp.v_config) as f:
         config = yaml.load(f, Loader=yaml.Loader)
     mb_melgan = TFMelGANGenerator(
@@ -182,7 +159,6 @@ if __name__ == "__main__":
     print(discriminator.summary())
 
     checkpoint = tf.train.Checkpoint(
-                    #first_stage=first_stage,
                     generator_optimizer=g_optimizer,
                     discriminator_optimizer=d_optimizer,
                     encoder=encoder,
@@ -221,11 +197,6 @@ if __name__ == "__main__":
         x_pos, mask = inputs
 
         x_incomplete = x_pos * (1.-mask)
-        '''
-        first_stage_input = [x_incomplete, mask]
-        x_stage1 = first_stage(inputs=first_stage_input, training=False)
-        semap = x_incomplete + x_stage1 * mask
-        '''
         semap = x_incomplete
         x_mean, x_var = encoder(inputs=semap, training=False)
         G_input = [semap, x_mean, x_var]
@@ -243,8 +214,6 @@ if __name__ == "__main__":
 
         summary_images = [x_incomplete, x_complete, x_pos]
         summary_images = tf.concat(summary_images, axis=2)
-
-        #summary_audios = tf.concat([x_audios, pos_audios, incomplete_audios], axis=2)
 
         return summary_images
 
@@ -268,7 +237,6 @@ if __name__ == "__main__":
 
         test_images = test_step([x_pos, mask])
 
-        #test_x, test_pos, test_incomplete = tf.split(test_audios, 3, axis=2)
         incomplete, complete, pos = tf.split(test_images, 3, axis=2)
         if num_pad_data > 0:
             incomplete = incomplete[:-num_pad_data]

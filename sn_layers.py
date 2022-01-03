@@ -170,7 +170,6 @@ class SNConv(Layer):
             name=tf_op_name)
         self.built = True
 
-
     def call(self, inputs):
         if self._is_causal:  # Apply causal padding to inputs for Conv1D.
             inputs = array_ops.pad(inputs, self._compute_causal_padding(inputs))

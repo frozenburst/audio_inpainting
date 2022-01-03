@@ -23,26 +23,23 @@ print(tf.__version__)
 
 class hp:
     # Training setting
-    data_file = 'ljs'   # esc50, maestro, ljs
+    data_file = 'maestro'   # esc50, maestro, ljs
     isMag = True
     labeled = False  # 15:True, large:False
     save_descript = '_spadeNet_bs1_AllWeighted_Novocol_m100'
     debug_graph = False
-    # training_file = op.join('./data', data_file, 'train_list.txt')
     testing_file = op.join('./data', data_file, 'test_list.txt')
     logdir = op.join('./test_logs', f'{data_file}{save_descript}')
     is_output = True
-    is_output_wav = False
+    is_output_wav = True
     output_dir = op.join(logdir, 'output')
     wave_dir = op.join(output_dir, 'wave')
     wav_ext = '.wav'
-    # pretrain_model = 'pretrain_models/first_stage'
     checkpoint_prefix = op.join(logdir, "ckpt")
-    checkpoint_restore_dir = './logs/ljs_spadeNet_bs16_AllWeighted_Novocol_m10_110'
+    checkpoint_restore_dir = f'./logs/{data_file}_spadeNet_bs16_AllWeighted_Novocol_m10_110'
     checkpoint_freq = 10000
     restore_epochs = 0  # Specify for restore training.
     epochs = 1
-    # summary_freq = 50
     steps_per_epoch = -1  # -1: whole training data.
     batch_size = 1
     max_outputs = 5
@@ -56,22 +53,15 @@ class hp:
     vocol_loss = False
     stft_alpha = 10.    # Serve as perceptual
     # Data
-    sr = 22050          # ljs: 22050, others: 44100
+    sr = 44100          # ljs: 22050, others: 44100
     hop_size = 256
     image_height = 256
     image_width = 256
     image_channel = 1
     length_5sec = int((sr / hop_size) * 5)              # int() = floor()
-    # mask_height = 256
-    # mask_width = round(length_5sec * 0.2 * 1.1)        # max of mask width
-    # max_delta_height = 0
-    # max_delta_width = round(length_5sec * 0.2 * 0.2)    # decrease with this delta
-    # vertical_margin = 0
-    # horizontal_margin = 0
     seg_middle = round(length_5sec * 0.2 * 3.5)        # esc50: 0, others: 2.75
     seg_start = seg_middle - (image_width // 2)
-    # seg_start = 0
-    mask_pth = '/work/r08922a13/datasets/mask/mask_time_086.npy'
+    mask_pth = '/work/r08922a13/datasets/mask/mask_time_172.npy'
     # 034 068 104 138 172
     # 018 034 052 068 086
     ir_mask = False
@@ -221,7 +211,6 @@ if __name__ == "__main__":
         pre = x_ori[:, :, :rands, :]
         post = x_ori[:, :, rands+x_incomplete.shape[-2]:, :]
         incomplete = tf.concat([pre, x_incomplete, post], axis=2)
-        # complete = tf.concat([pre, x_complete, post], axis=2)
         complete = tf.concat([pre, x_stage2, post], axis=2)
         incomplete.set_shape(x_ori.shape)
         complete.set_shape(x_ori.shape)
@@ -247,9 +236,6 @@ if __name__ == "__main__":
         g_2st_loss = hp.l1_alpha * L1_loss(x_pos, x_complete, True)
         g_2st_loss_noW = hp.l1_alpha * L1_loss(x_pos, x_complete, False)
 
-        # t_loss = g_2st_loss
-        # t_loss = loss_fn(x_pos, x_stage2)
-
         loss['test/mae'] = g_2st_loss_noW
         loss['test/weighted mae'] = g_2st_loss
         loss['test/psnr'] = tf.math.reduce_mean(tf.image.psnr(x_pos, x_complete, max_val=1.0))
@@ -260,18 +246,12 @@ if __name__ == "__main__":
         test_weighted_loss.update_state(g_2st_loss)
         test_accuracy.update_state(x_pos, x_complete)
 
-        #summary_images = [x_incomplete, x_stage1, x_stage2, x_complete, x_pos, semap]
         summary_images = [x_incomplete, x_stage2, x_complete, x_pos]
         summary_images = tf.concat(summary_images, axis=2)
 
         summary_audios = tf.concat([x_audios, pos_audios, incomplete_audios], axis=2)
 
         return loss, summary_images, summary_audios
-
-        # @tf.function
-        # def distributed_test_step(dataset_inputs):
-        #     summary_images, summary_audios = strategy.run(test_step, args=(dataset_inputs,))
-        #     return summary_images, summary_audios
 
         # Experiment Epoch
     for epoch in range(hp.restore_epochs, hp.epochs+hp.restore_epochs):
@@ -309,9 +289,6 @@ if __name__ == "__main__":
                 np_incomplete_name = op.join(hp.output_dir, incomplete_name)
                 wav_incomplete_name = op.join(hp.wave_dir, incomplete_name) + hp.wav_ext
                 np.save(np_incomplete_name, img_incomplete[0])
-                if hp.is_output_wav:
-                    incomplete_wav = tf.audio.encode_wav(test_incomplete[0], hp.sr)
-                    tf.io.write_file(wav_incomplete_name, incomplete_wav)
 
                 complete_name = op.basename(str(filename[0])).split('-mag-')[0] + '_complete'
                 np_complete_name = op.join(hp.output_dir, complete_name)
@@ -329,9 +306,6 @@ if __name__ == "__main__":
                 np_ori_name = op.join(hp.output_dir, ori_name)
                 wav_ori_name = op.join(hp.wave_dir, ori_name) + hp.wav_ext
                 np.save(np_ori_name, img_pos[0])
-                if hp.is_output_wav:
-                    ori_wav = tf.audio.encode_wav(test_pos[0], hp.sr)
-                    tf.io.write_file(wav_ori_name, ori_wav)
 
         for key in total_loss:
             total_loss[key] = total_loss[key] / num_batches

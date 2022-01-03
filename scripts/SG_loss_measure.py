@@ -15,10 +15,8 @@ from tqdm import tqdm
 
 import numpy as np
 import tensorflow as tf
-# import matplotlib.pyplot as plt
 import os.path as op
 import os
-import math
 
 
 def l1_loss(x, y):
@@ -73,18 +71,15 @@ if __name__ == "__main__":
     ext = '-mag-raw-feats.npy'
     # Measure loss of output
     for i, filename in tqdm(enumerate(sorted(Path(output_pth).glob('*rec-mag-raw-feats.npy')))):
-        # print(i, filename)
         file_basename = op.basename(filename).split('_')[0] + ext
 
         ref_spec_filename = op.join(ref_spec_pth, file_basename)
         ref_spec = np.load(ref_spec_filename)
-        # h, w = ref_spec.shape
         ref_spec = tf.convert_to_tensor(ref_spec, tf.float32)
         ref_spec = tf.reshape(ref_spec, [1]+ref_spec.shape+[1])
 
         inpaint_spec = np.load(filename)
         inpaint_spec = tf.convert_to_tensor(inpaint_spec, tf.float32)
-        # h, w, _ = inpaint_spec.shape
         inpaint_spec = tf.reshape(inpaint_spec, [1]+inpaint_spec.shape+[1])
 
         if ref_spec.shape != inpaint_spec.shape:
@@ -111,10 +106,6 @@ if __name__ == "__main__":
             loss_list = ssim_list
 
         with open(loss_filename, 'w') as f:
-        # f.write("#list_id, min, max, mean, percentile")
             for content in sorted(loss_list):
                 f.write(f'{content}\n')
-            #arr = np.array(sorted(dict_category_list[a_list]))
-            #s1, s2, s3 = np.percentile(arr, [25, 50, 75])
-            #f.write("%s %s %s %s %s %s %s\n" %(a_list, arr.min(), arr.max(), arr.mean(), s1, s2, s3))
         print("Save loss file to:", loss_filename)

@@ -9,9 +9,9 @@ import glob
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--train_path', default='/work/r08922a13/datasets/maestro-v3.0.0/sr41k/train/preprocess', type=str,
+parser.add_argument('--train_path', default='/your/workspace/datasets/maestro-v3.0.0/sr41k/train/preprocess', type=str,
                     help='The place for training data')
-parser.add_argument('--test_path', default='/work/r08922a13/datasets/maestro-v3.0.0/sr41k/test/preprocess', type=str,
+parser.add_argument('--test_path', default='/your/workspace/datasets/maestro-v3.0.0/sr41k/test/preprocess', type=str,
                     help='The place for testing data.')
 parser.add_argument('--train_file', default='../data/maestro/train_list.txt', type=str,
                     help='The generation name of training file list.')

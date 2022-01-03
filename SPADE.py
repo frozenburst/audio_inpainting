@@ -1,15 +1,14 @@
 import tensorflow as tf
 
 from tensorflow import keras
-from tensorflow.keras import layers
 import tensorflow_addons as tfa
 
 from sp_ops import sp_conv, fully_connected
-from sp_ops import spade, spade_resblock
+from sp_ops import spade_resblock
 from sp_ops import z_sample, up_sample, down_sample_avg
 
 
-# Reference from GitHub: https://github.com/JiahuiYu/generative_inpainting
+# Reference from NVIDIA SPADE, taki0112/SPADE-Tensorflow Github
 def image_encoder(img_height=256, img_width=256, img_channel=1, training=True):
     xin = keras.Input(shape=(img_height, img_width, img_channel), name="image")
 
@@ -43,7 +42,6 @@ def image_encoder(img_height=256, img_width=256, img_channel=1, training=True):
     var = fully_connected(x, channel // 2, use_bias=True, sn=sn, name='linear_var')
 
     image_encoder = keras.Model(inputs=xin, outputs=[mean, var], name='image_encoder')
-    # optimizer = keras.optimizers.Adam(1e-4, beta_1=0.0, beta_2=0.9)
     return image_encoder
 
 
@@ -93,7 +91,6 @@ def generator(img_height=256, img_width=256, img_channel=1, batch_size=16, linea
     outputs = x
 
     generator = keras.Model(inputs=[semap, x_mean, x_var], outputs=outputs, name='G')
-    # optimizer = keras.optimizers.Adam(1e-4, beta_1=0.0, beta_2=0.9)
     return generator
 
 
@@ -127,7 +124,6 @@ def discriminator(img_height=256, img_width=256, img_channel=1, training=True, n
             x = tf.keras.layers.LeakyReLU(alpha)(x)
 
             feature_loss.append(x)
-            # channel = min(channel * 2, 512)
 
         x = sp_conv(x, channels=1, kernel=4, stride=1, pad=1, use_bias=True, sn=sn, name=f'ms_{scale}_D_logit')
 
@@ -140,5 +136,4 @@ def discriminator(img_height=256, img_width=256, img_channel=1, training=True, n
     outputs = D_logit
 
     discriminator = keras.Model(inputs=inputs, outputs=outputs, name='D')
-    # optimizer = keras.optimizers.Adam(2e-4, beta_1=0.0, beta_2=0.9)
     return discriminator

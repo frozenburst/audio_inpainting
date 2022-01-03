@@ -1,8 +1,6 @@
 #!/usr/bin/env python
 # coding: utf-8
-from pathlib import Path
 from tqdm import tqdm
-from shutil import copyfile
 
 import tensorflow as tf
 import numpy as np
@@ -10,12 +8,11 @@ import os.path as op
 import matplotlib.pyplot as plt
 import os
 import glob
-import random
 import argparse
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--folder_path', default='/work/r08922a13/datasets/LJSpeech-1.1/wavs', type=str,
+parser.add_argument('--folder_path', default='/your/workspace/datasets/LJSpeech-1.1/wavs', type=str,
                     help='The data root')
 
 
@@ -23,7 +20,6 @@ class hp:
     sr = 44100      # Sampling rate. LJS:22050
     n_fft = 510     # let height of spec be 256
     win_length = n_fft
-    # hop_length = win_length // 2    # 256
     hop_length = 256    # fix due to 510/2 = 255
     n_mels = 80
     power = 2
@@ -41,7 +37,6 @@ class hp:
     mag_suffix = "-mag-raw-feats"
     wav_ext = ".wav"
     img_ext = ".png"
-
 
 
 def toSpec_db_norm(waveform):
@@ -99,7 +94,6 @@ if __name__ == "__main__":
 
     # Extract features
     for filename in tqdm(audio_filenames):
-        # filename = str(filename)
         raw_audio = tf.io.read_file(filename)
         waveform, sr = tf.audio.decode_wav(raw_audio)
         if sr != hp.sr:
@@ -118,7 +112,6 @@ if __name__ == "__main__":
 
         # Save to file
         basename = op.basename(filename)[:-4]
-        # dir_name = op.join(op.dirname(filename), process_dir)
 
         # mag shape: [T, n_fft//2] -> [n_fft//2, T]
         spec = tf.transpose(spec, perm=[1, 0])

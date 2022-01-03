@@ -52,6 +52,7 @@ def load_data_filename(filename, islabeled=False):
 
     return np.array(data_fnames), np.array(labels)
 
+
 def get_class_name():
     class_names = [
           'dog', 'rooster', 'pig', 'cow', 'frog',

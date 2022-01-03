@@ -10,15 +10,10 @@ options:
     --output_pth=<output path>
 """
 from docopt import docopt
-from pathlib import Path
-from tqdm import tqdm
 
 import numpy as np
 import tensorflow as tf
-# import matplotlib.pyplot as plt
 import os.path as op
-import os
-import math
 
 
 def l1_loss(x, y):
@@ -72,13 +67,11 @@ if __name__ == "__main__":
     # Measure loss of output
 
     ref_spec = np.load(ref_spec_pth)
-    # h, w = ref_spec.shape
     ref_spec = tf.convert_to_tensor(ref_spec, tf.float32)
     ref_spec = tf.reshape(ref_spec, [1]+ref_spec.shape+[1])
 
     inpaint_spec = np.load(output_pth)
     inpaint_spec = tf.convert_to_tensor(inpaint_spec, tf.float32)
-    # h, w, _ = inpaint_spec.shape
     if len(inpaint_spec.shape) == 3:
         inpaint_spec = tf.reshape(inpaint_spec, [1]+inpaint_spec.shape)
     elif len(inpaint_spec.shape) == 2:
