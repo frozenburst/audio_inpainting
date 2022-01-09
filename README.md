@@ -1,4 +1,4 @@
-# Audio_inpainting
+# SLAIN - Audio Inpainting With Conditional GAN
 
 This works is under review right now.
 Paper with details might be available in the future.
