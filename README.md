@@ -1,7 +1,7 @@
 # SLAIN - Audio Inpainting With Conditional GAN
 
 This works is under review right now.
-Paper with details might be available in the future.
+Main paper with details might be available in the future.
 
 
 1. git clone repo
@@ -23,3 +23,5 @@ Paper with details might be available in the future.
 1. Samples results with Esc-50 dataset: https://drive.google.com/drive/folders/1q3ZByD4zqgPn5ou5qs-Ycw8eI0xgNfOv?usp=sharing
 2. Samples results with the Maestro dataset: https://drive.google.com/drive/folders/1xQLRO3KRJd74SrEvTjziIWLOHLP05FLE?usp=sharing
 
+## Supplementary
+https://drive.google.com/file/d/1CkcF3oDRconF4PsYTXyda8KriSfX1jRN/view?usp=sharing
