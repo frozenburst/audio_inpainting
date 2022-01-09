@@ -18,6 +18,8 @@ Paper with details might be available in the future.
 
 ## Attachments
 1. The checkpoints of Esc-50, the Maestro and the pretrained Vocoder MBmelGAN: https://drive.google.com/drive/folders/1IF2HtKee5cmffmm-CfJYrtFzJddAiVRD?usp=sharing
-2. Samples of our results and baselines with Esc-50 dataset: https://drive.google.com/drive/folders/1q3ZByD4zqgPn5ou5qs-Ycw8eI0xgNfOv?usp=sharing
-3. Samples of our results and baselines with the Maestro dataset: https://drive.google.com/drive/folders/1xQLRO3KRJd74SrEvTjziIWLOHLP05FLE?usp=sharing
+
+## Results with baselines.
+1. Samples results with Esc-50 dataset: https://drive.google.com/drive/folders/1q3ZByD4zqgPn5ou5qs-Ycw8eI0xgNfOv?usp=sharing
+2. Samples results with the Maestro dataset: https://drive.google.com/drive/folders/1xQLRO3KRJd74SrEvTjziIWLOHLP05FLE?usp=sharing
 
