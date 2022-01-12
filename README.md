@@ -6,7 +6,7 @@ Main paper with details might be available in the future.
 
 1. git clone repo
 2. cd audio_inpainting
-3. git submodule updata --init
+3. git submodule update --init
 
 ## Description
 
