@@ -1,8 +1,16 @@
 # SLAIN - Audio Inpainting With Conditional GAN
 
-This works is under review right now.
-Main paper with details might be available in the future.
+This is my master research in NTU.
 
+The works has been rejected due to lack of comparison,
+with the overlook of my rebuttal.
+Then I just leave it along...
+
+The results are good and the method is innovative at that time,
+That's all for me to be satisfied.
+
+To reproduce the results, the instruction below lack of details to build env,
+and it wont be fixed.
 
 1. git clone repo
 2. cd audio_inpainting
