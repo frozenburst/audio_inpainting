@@ -1,6 +1,9 @@
 # SLAIN - Audio Inpainting With Conditional GAN
 
+## Intro
+
 This is my master research in NTU.
+It can inpaint the missing part in a segment of music or sound, especially on time axis.
 
 The works has been rejected due to lack of comparison,
 with the overlook of my rebuttal.
@@ -11,6 +14,8 @@ That's all for me to be satisfied.
 
 To reproduce the results, the instruction below lack of details to build env,
 and it wont be fixed.
+
+## Instruction
 
 1. git clone repo
 2. cd audio_inpainting
